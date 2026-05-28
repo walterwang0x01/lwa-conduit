@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+.venv/
+venv/
+
+# Node
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Rust（备选实现语言）
+target/
+Cargo.lock
+
+# 项目本地状态（worktree 缓存、运行时数据）
+.kiro-conduit/
+runtime/
+*.local
+
+# secrets
+.env
+.env.local
+.env.*.local
+
+# Kiro 本地配置（agent 配置可能含个人偏好，不入仓）
+.kiro/settings/
