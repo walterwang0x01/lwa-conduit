@@ -1,0 +1,61 @@
+# M1.0 demo workspace：3 个 task，phase A 串行，phase B 并行 2 个。
+#
+# 期望波次：
+#   wave 1: [pkg-base]                  # phase A 唯一 task
+#   wave 2: [pkg-mul, pkg-sub]          # phase B 两个并行（都 depends pkg-base）
+#
+# 共享文件：src/calc/__init__.py 同时被 pkg-mul 和 pkg-sub 修改 (single-writer 锁)。
+phases:
+  - name: A
+    type: serial
+    tasks: [pkg-base]
+  - name: B
+    type: parallel
+    tasks: [pkg-mul, pkg-sub]
+
+tasks:
+  pkg-base:
+    spec: specs/pkg-base.md
+    depends_on: []
+    files_owned:
+      - "src/calc/__init__.py"
+      - "src/calc/add.py"
+      - "tests/test_add.py"
+    shared_files_to_modify: []
+    max_lines: 200
+    max_files: 5
+    acceptance:
+      - "python3 -m py_compile src/calc/add.py"
+      - "pytest -q tests/test_add.py"
+
+  pkg-mul:
+    spec: specs/pkg-mul.md
+    depends_on: [pkg-base]
+    files_owned:
+      - "src/calc/mul.py"
+      - "tests/test_mul.py"
+    shared_files_to_modify:
+      - "src/calc/__init__.py"
+    max_lines: 200
+    max_files: 5
+    acceptance:
+      - "python3 -m py_compile src/calc/mul.py"
+      - "pytest -q tests/test_mul.py"
+
+  pkg-sub:
+    spec: specs/pkg-sub.md
+    depends_on: [pkg-base]
+    files_owned:
+      - "src/calc/sub.py"
+      - "tests/test_sub.py"
+    shared_files_to_modify:
+      - "src/calc/__init__.py"
+    max_lines: 200
+    max_files: 5
+    acceptance:
+      - "python3 -m py_compile src/calc/sub.py"
+      - "pytest -q tests/test_sub.py"
+
+shared_files:
+  - path: "src/calc/__init__.py"
+    policy: single-writer

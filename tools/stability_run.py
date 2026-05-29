@@ -129,7 +129,10 @@ async def main() -> int:
     attempts_total = sum(s.attempts for s in stats)
     print(f"  成功率：{pass_count}/{n} ({pass_count / n * 100:.0f}%)")
     print(f"  总尝试次数：{attempts_total}（理想 {n}，每次 1 次）")
-    print(f"  耗时：min={min(durations):.1f}s avg={sum(durations) / n:.1f}s max={max(durations):.1f}s")
+    print(
+        f"  耗时：min={min(durations):.1f}s "
+        f"avg={sum(durations) / n:.1f}s max={max(durations):.1f}s"
+    )
     print()
     print("逐次明细：")
     print(f"  {'#':<3} {'pass':<5} {'attempts':<10} {'dur(s)':<8} {'failed_layer'}")
