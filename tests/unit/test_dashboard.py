@@ -140,6 +140,85 @@ class TestDashboardState:
         assert db._state.run_completed.passed_count == 2
 
 
+class TestTaskDuration:
+    """M2.0.2: 每个 task 的开始/结束时间戳 + duration 计算。"""
+
+    def test_pending_task_no_duration(self, tmp_path: Path) -> None:
+        ws = make_workspace(tmp_path)
+        db = Dashboard(workspace=ws)
+        ts = db._state.tasks["t1"]
+        assert ts.started_at is None
+        assert ts.finished_at is None
+        assert ts.duration() is None
+
+    def test_running_task_has_running_duration(self, tmp_path: Path) -> None:
+        import time
+
+        ws = make_workspace(tmp_path)
+        db = Dashboard(workspace=ws)
+        bus = EventBus()
+        db.attach(bus)
+        bus.publish(TaskStarted(task_id="t1", attempt=1, max_attempts=3))
+        ts = db._state.tasks["t1"]
+        assert ts.started_at is not None
+        assert ts.finished_at is None
+        # 等一小会儿确保 monotonic 推进
+        time.sleep(0.02)
+        d = ts.duration()
+        assert d is not None
+        assert d >= 0.02
+
+    def test_finished_task_has_total_duration(self, tmp_path: Path) -> None:
+        import time
+
+        ws = make_workspace(tmp_path)
+        db = Dashboard(workspace=ws)
+        bus = EventBus()
+        db.attach(bus)
+        bus.publish(TaskStarted(task_id="t1", attempt=1, max_attempts=3))
+        time.sleep(0.02)
+        bus.publish(TaskFinished(task_id="t1", attempt=1, passed=True))
+        ts = db._state.tasks["t1"]
+        assert ts.finished_at is not None
+        d1 = ts.duration()
+        # 完成后再等，duration 不应继续增长
+        time.sleep(0.02)
+        d2 = ts.duration()
+        assert d1 is not None and d2 is not None
+        assert d1 == d2
+
+    def test_retry_does_not_reset_started_at(self, tmp_path: Path) -> None:
+        """重试时第二次 TaskStarted 不应重置 started_at——保留含重试的总耗时语义。"""
+        import time
+
+        ws = make_workspace(tmp_path)
+        db = Dashboard(workspace=ws)
+        bus = EventBus()
+        db.attach(bus)
+        bus.publish(TaskStarted(task_id="t1", attempt=1, max_attempts=3))
+        ts = db._state.tasks["t1"]
+        first_started = ts.started_at
+        time.sleep(0.02)
+        bus.publish(TaskStarted(task_id="t1", attempt=2, max_attempts=3))
+        assert ts.started_at == first_started
+
+    def test_render_includes_duration_column(self, tmp_path: Path) -> None:
+        from io import StringIO
+
+        from rich.console import Console
+
+        ws = make_workspace(tmp_path)
+        console = Console(file=StringIO(), force_terminal=False, width=120)
+        db = Dashboard(workspace=ws, console=console)
+        bus = EventBus()
+        db.attach(bus)
+        bus.publish(TaskStarted(task_id="t1", attempt=1, max_attempts=3))
+        bus.publish(TaskFinished(task_id="t1", attempt=1, passed=True))
+        console.print(db.render())
+        out = console.file.getvalue()
+        assert "duration" in out
+
+
 class TestDashboardRender:
     """render() 不该崩，且包含期望的字符串。"""
 

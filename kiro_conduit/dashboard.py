@@ -51,6 +51,15 @@ class _TaskState:
     status: str = "pending"  # pending / running / passed / failed
     attempts: int = 0
     failed_layer: str | None = None
+    started_at: float | None = None  # monotonic timestamp
+    finished_at: float | None = None  # monotonic timestamp
+
+    def duration(self) -> float | None:
+        """耗时（秒）。pending 返回 None；running 返回到现在的累积；finished 返回总耗时。"""
+        if self.started_at is None:
+            return None
+        end = self.finished_at if self.finished_at is not None else time.monotonic()
+        return end - self.started_at
 
 
 @dataclass
@@ -147,11 +156,13 @@ class Dashboard:
         table.add_column(no_wrap=True)
         table.add_column(no_wrap=True)
         table.add_column(no_wrap=True)
+        table.add_column(no_wrap=True)
         table.add_column()
         table.add_row(
             "[bold]task[/]",
             "[bold]status[/]",
             "[bold]attempts[/]",
+            "[bold]duration[/]",
             "[bold]failed layer[/]",
         )
         for tid in sorted(self._state.tasks):
@@ -162,10 +173,13 @@ class Dashboard:
                 "passed": "green",
                 "failed": "red",
             }.get(ts.status, "white")
+            duration = ts.duration()
+            duration_text = f"{duration:.1f}s" if duration is not None else "-"
             table.add_row(
                 tid,
                 f"[{color}]{ts.status}[/]",
                 str(ts.attempts) if ts.attempts else "-",
+                duration_text,
                 ts.failed_layer or "-",
             )
         return Panel(table, title="Tasks", border_style="cyan")
@@ -234,11 +248,15 @@ class Dashboard:
             ts = self._state.tasks.setdefault(event.task_id, _TaskState())
             ts.status = "running"
             ts.attempts = max(ts.attempts, event.attempt)
+            # 仅第一次 started 记开始时间（重试不重置——总耗时含重试）
+            if ts.started_at is None:
+                ts.started_at = time.monotonic()
         elif isinstance(event, TaskFinished):
             ts = self._state.tasks.setdefault(event.task_id, _TaskState())
             ts.status = "passed" if event.passed else "failed"
             ts.attempts = max(ts.attempts, event.attempt)
             ts.failed_layer = event.failed_layer
+            ts.finished_at = time.monotonic()
         elif isinstance(event, LockEvent):
             ls = self._state.locks.setdefault(event.file_path, _LockState())
             ls.last_action = event.action
