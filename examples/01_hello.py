@@ -61,7 +61,7 @@ async def main() -> int:
         # 3. 发 prompt，流式打印响应
         prompt_text = "用一句话介绍你自己。"
         print(f"→ Prompt: {prompt_text}")
-        print(f"← Agent:")
+        print("← Agent:")
 
         events_iter = await client.prompt(session_id, prompt_text)
         async for event in events_iter:

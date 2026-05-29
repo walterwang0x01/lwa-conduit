@@ -13,7 +13,6 @@ M0 实现策略：
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from kiro_conduit.acp import (
@@ -76,7 +75,7 @@ class Implementor:
                             event.stop_reason,
                         )
                         break
-        except (asyncio.TimeoutError, ConnectionError) as exc:
+        except (TimeoutError, ConnectionError) as exc:
             logger.error("[implementor] task=%s failed: %s", task.id, exc)
             return TaskResult(
                 task_id=task.id,

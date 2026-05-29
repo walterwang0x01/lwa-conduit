@@ -28,16 +28,16 @@ from typing import Any
 
 from kiro_conduit.acp.messages import (
     ACP_PROTOCOL_VERSION,
+    SESSION_UPDATE_AGENT_MESSAGE_CHUNK,
+    SESSION_UPDATE_AGENT_THOUGHT_CHUNK,
+    SESSION_UPDATE_TOOL_CALL,
+    SESSION_UPDATE_TOOL_CALL_UPDATE,
     AcpError,
     AcpProtocolError,
     AgentMessageChunk,
     AgentThoughtChunk,
     JsonRpcRequest,
     Method,
-    SESSION_UPDATE_AGENT_MESSAGE_CHUNK,
-    SESSION_UPDATE_AGENT_THOUGHT_CHUNK,
-    SESSION_UPDATE_TOOL_CALL,
-    SESSION_UPDATE_TOOL_CALL_UPDATE,
     SessionEvent,
     ToolCallEvent,
     TurnEnd,
@@ -88,6 +88,8 @@ class AcpClient:
         self._session_queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        # 保留对反向请求响应 task 的强引用，防止被 GC 提前回收
+        self._detached_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
     # ------------------------------------------------------------------ start
@@ -229,7 +231,7 @@ class AcpClient:
                 self._proc.terminate()
             try:
                 await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 with suppress(ProcessLookupError):
                     self._proc.kill()
                 await self._proc.wait()
@@ -260,6 +262,12 @@ class AcpClient:
         finally:
             self._pending.pop(req_id, None)
 
+    def _spawn_detached(self, coro: Any) -> None:
+        """起一个 fire-and-forget task，但保留强引用防止被 GC 回收。"""
+        task: asyncio.Task[None] = asyncio.create_task(coro)
+        self._detached_tasks.add(task)
+        task.add_done_callback(self._detached_tasks.discard)
+
     async def _send(self, payload: dict[str, Any]) -> None:
         assert self._proc.stdin is not None
         line = json.dumps(payload, ensure_ascii=False) + "\n"
@@ -287,7 +295,7 @@ class AcpClient:
                 self._dispatch(msg)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("ACP reader crashed")
 
     async def _drain_stderr(self) -> None:
@@ -303,7 +311,7 @@ class AcpClient:
                     logger.debug("[kiro stderr] %s", text)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("ACP stderr drainer crashed")
 
     def _dispatch(self, msg: dict[str, Any]) -> None:
@@ -338,18 +346,14 @@ class AcpClient:
             method,
             req_id,
         )
-        asyncio.create_task(
-            self._send(
-                {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "error": {
-                        "code": -32601,  # JSON-RPC standard: Method not found
-                        "message": f"client does not implement {method}",
-                    },
-                }
-            )
-        )
+        self._spawn_detached(self._send({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32601,  # JSON-RPC standard: Method not found
+                "message": f"client does not implement {method}",
+            },
+        }))
 
     def _respond_permission(self, req_id: Any, params: dict[str, Any]) -> None:
         """根据 permission_policy 自动响应权限请求。"""
@@ -374,15 +378,11 @@ class AcpClient:
 
         if chosen_id is None:
             logger.warning("permission request has no usable options: %r", params)
-            asyncio.create_task(
-                self._send(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {"outcome": {"outcome": "cancelled"}},
-                    }
-                )
-            )
+            self._spawn_detached(self._send({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"outcome": {"outcome": "cancelled"}},
+            }))
             return
 
         logger.debug(
@@ -390,20 +390,16 @@ class AcpClient:
             target_kind,
             chosen_id,
         )
-        asyncio.create_task(
-            self._send(
-                {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "outcome": {
-                            "outcome": "selected",
-                            "optionId": chosen_id,
-                        }
-                    },
+        self._spawn_detached(self._send({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "outcome": {
+                    "outcome": "selected",
+                    "optionId": chosen_id,
                 }
-            )
-        )
+            },
+        }))
 
     def _handle_response(self, msg: dict[str, Any]) -> None:
         msg_id = msg.get("id")

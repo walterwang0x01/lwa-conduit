@@ -68,7 +68,12 @@ select = [
     "SIM", # flake8-simplify
     "RUF", # ruff-specific
 ]
-ignore = []
+ignore = [
+    # 项目以中文注释为主，全角标点是常态，关掉这三类噪音规则
+    "RUF001", # ambiguous unicode in name
+    "RUF002", # ambiguous unicode in docstring
+    "RUF003", # ambiguous unicode in comment
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["kiro_conduit"]

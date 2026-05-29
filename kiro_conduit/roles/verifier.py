@@ -165,7 +165,7 @@ class Verifier:
             stdout_b, _ = await asyncio.wait_for(
                 proc.communicate(), timeout=self._command_timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             return 124, f"(timeout after {self._command_timeout}s)"
