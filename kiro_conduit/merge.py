@@ -35,12 +35,30 @@ logger = logging.getLogger(__name__)
 class MergeError(RuntimeError):
     """merge 操作失败（冲突 / 命令错误等）。"""
 
+    def __init__(self, message: str, diagnostic: MergeDiagnostic | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+@dataclass(frozen=True, slots=True)
+class MergeDiagnostic:
+    """一次 merge 冲突的结构化诊断（诊断模式下产出，辅助人工 review）。"""
+
+    conflicted_files: tuple[str, ...]  # 冲突的文件路径
+    detail: str  # 带冲突标记的 diff（git diff --diff-filter=U）
+
+    def to_message(self) -> str:
+        files = "\n".join(f"  - {f}" for f in self.conflicted_files) or "  (none)"
+        head = f"conflicted files ({len(self.conflicted_files)}):\n{files}"
+        return f"{head}\n\n{self.detail}" if self.detail else head
+
 
 @dataclass(frozen=True, slots=True)
 class TaskMergeResult:
     task_id: str
     merged: bool
     error: str | None = None
+    diagnostic: MergeDiagnostic | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +84,8 @@ class MergeOrchestrator:
         workspace: Workspace,
         base_repo: Path,
         event_bus: EventBus | None = None,
+        *,
+        diagnose: bool = False,
     ) -> None:
         if not base_repo.is_absolute():
             raise ValueError(f"base_repo must be absolute, got {base_repo}")
@@ -73,6 +93,8 @@ class MergeOrchestrator:
         self._base_repo = base_repo
         self._git_lock = asyncio.Lock()
         self._event_bus = event_bus
+        # 诊断模式：merge 冲突时在 abort 前抓取结构化诊断（冲突文件 + 内容）
+        self._diagnose = diagnose
 
     async def merge(
         self,
@@ -122,7 +144,10 @@ class MergeOrchestrator:
                 except MergeError as exc:
                     logger.error("[merge] %s failed: %s", tid, exc)
                     results[tid] = TaskMergeResult(
-                        task_id=tid, merged=False, error=str(exc)
+                        task_id=tid,
+                        merged=False,
+                        error=str(exc),
+                        diagnostic=exc.diagnostic,
                     )
                     self._publish_merge_finished(tid, merged=False, error=str(exc))
                     stopped_at = tid
@@ -195,12 +220,27 @@ class MergeOrchestrator:
             ],
         )
         if code != 0:
-            # 冲突：abort merge，让 base 回到 clean 状态
+            # 冲突：诊断模式下先抓取冲突信息，再 abort 让 base 回到 clean 状态
+            diagnostic = (
+                await self._capture_conflict_diagnostic() if self._diagnose else None
+            )
             await run_git(self._base_repo, ["merge", "--abort"])
             raise MergeError(
                 f"merge {handle.branch} into {base_branch} conflicted: "
-                f"{stderr.strip() or stdout.strip()}"
+                f"{stderr.strip() or stdout.strip()}",
+                diagnostic=diagnostic,
             )
+
+    async def _capture_conflict_diagnostic(self) -> MergeDiagnostic:
+        """在 merge --abort 之前抓取当前冲突状态（诊断模式专用）。"""
+        _code, files_out, _err = await run_git(
+            self._base_repo, ["diff", "--name-only", "--diff-filter=U"]
+        )
+        files = tuple(f for f in files_out.splitlines() if f.strip())
+        _code, detail, _err = await run_git(
+            self._base_repo, ["diff", "--diff-filter=U"]
+        )
+        return MergeDiagnostic(conflicted_files=files, detail=detail.strip())
 
     async def _commit_worktree(
         self, handle: WorktreeHandle, message: str

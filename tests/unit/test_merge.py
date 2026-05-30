@@ -163,6 +163,58 @@ class TestMergeOrchestrator:
             assert not report.all_merged
 
     @pytest.mark.asyncio
+    async def test_conflict_diagnostic_when_enabled(
+        self, base_repo: Path, tmp_path: Path
+    ) -> None:
+        """诊断模式开启时，冲突的 t3 应带结构化诊断（冲突文件 + 内容）。"""
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        ws = load_workspace(make_simple_workspace(ws_dir))
+
+        async with WorktreeManager(base_repo) as wm:
+            ht2 = await wm.create("t2")
+            (ht2.path / "README.md").write_text("base\nfrom-t2\n")
+            ht3 = await wm.create("t3")
+            (ht3.path / "README.md").write_text("base\nfrom-t3\n")
+
+            mo = MergeOrchestrator(ws, base_repo, diagnose=True)
+            report = await mo.merge(
+                handles={"t2": ht2, "t3": ht3},
+                successful_task_ids={"t2", "t3"},
+            )
+
+            diag = report.results["t3"].diagnostic
+            assert diag is not None
+            assert "README.md" in diag.conflicted_files
+            assert "README.md" in diag.to_message()
+            # base 应已回到 clean（abort 生效）
+            assert (base_repo / "README.md").read_text() == "base\nfrom-t2\n"
+
+    @pytest.mark.asyncio
+    async def test_no_diagnostic_by_default(
+        self, base_repo: Path, tmp_path: Path
+    ) -> None:
+        """默认（diagnose=False）冲突时不产出诊断，行为不变。"""
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        ws = load_workspace(make_simple_workspace(ws_dir))
+
+        async with WorktreeManager(base_repo) as wm:
+            ht2 = await wm.create("t2")
+            (ht2.path / "README.md").write_text("base\nfrom-t2\n")
+            ht3 = await wm.create("t3")
+            (ht3.path / "README.md").write_text("base\nfrom-t3\n")
+
+            mo = MergeOrchestrator(ws, base_repo)
+            report = await mo.merge(
+                handles={"t2": ht2, "t3": ht3},
+                successful_task_ids={"t2", "t3"},
+            )
+
+            assert not report.results["t3"].merged
+            assert report.results["t3"].diagnostic is None
+
+    @pytest.mark.asyncio
     async def test_no_changes_in_worktree_skipped(
         self, base_repo: Path, tmp_path: Path
     ) -> None:
