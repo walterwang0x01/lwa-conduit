@@ -78,6 +78,29 @@ class TestWorktreeManager:
             assert handle.path.is_dir()
 
     @pytest.mark.asyncio
+    async def test_residual_worktree_recovered(self, tmp_git_repo: Path) -> None:
+        """模拟上次进程被 kill：worktree 物理目录 + .git 元数据残留，
+        再 create 同名 task 应该能先清理再重建成功。"""
+        from kiro_conduit.git_utils import run_git
+
+        root = tmp_git_repo / ".kiro-conduit" / "worktrees"
+        root.mkdir(parents=True, exist_ok=True)
+        residual = root / "ghost"
+        # 制造残留：直接 git worktree add（不经过 manager，模拟上次跑遗留）
+        code, _, _ = await run_git(
+            tmp_git_repo,
+            ["worktree", "add", str(residual), "-b", "kiro-conduit/ghost", "main"],
+        )
+        assert code == 0
+        assert residual.is_dir()
+
+        async with WorktreeManager(tmp_git_repo) as wm:
+            # 同名 task：manager 应先清残留（含 .git/worktrees 元数据）再重建
+            handle = await wm.create("ghost")
+            assert handle.path == residual
+            assert handle.path.is_dir()
+
+    @pytest.mark.asyncio
     async def test_git_lock_serializes_operations(self, tmp_git_repo: Path) -> None:
         """同一个 manager 上并发跑多个 create，git_lock 保证不撞车。"""
         import asyncio

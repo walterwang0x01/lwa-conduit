@@ -100,8 +100,12 @@ class WorktreeManager:
         path = self._root / task_id
         branch = f"{BRANCH_PREFIX}/{task_id}"
 
-        # 防御：如果同名分支已存在（上次跑残留），先尝试删
+        # 防御：清理上次跑可能留下的残留——
+        # 1. 物理 worktree 目录还在（上次 SIGKILL / 磁盘问题等）
+        # 2. .git/worktrees/<task_id>/ 元数据残留
+        # 3. 同名分支残留
         async with self._git_lock:
+            await self._cleanup_residual_worktree(path)
             await self._cleanup_residual_branch(branch)
             code, _stdout, stderr = await run_git(
                 self._base_repo,
@@ -154,6 +158,26 @@ class WorktreeManager:
         return list(self._handles.values())
 
     # ------------------------------------------------------------ internal
+
+    async def _cleanup_residual_worktree(self, path: Path) -> None:
+        """清理上次跑残留的 worktree（物理目录 + .git 元数据）。无锁内部调用。
+
+        场景：上次进程被 SIGKILL / 磁盘异常，没走正常 cleanup，留下：
+        - 物理目录 path 还在
+        - .git/worktrees/<name>/ 元数据还在——git 仍认为该路径注册着 worktree，
+          导致后续 `git worktree add` 同路径直接报错
+        """
+        # 先让 git 按注册信息移除（处理大多数正常残留）
+        if path.exists():
+            await run_git(
+                self._base_repo,
+                ["worktree", "remove", "--force", str(path)],
+            )
+        # prune 掉指向已消失目录的 .git/worktrees/<name>/ 元数据
+        await run_git(self._base_repo, ["worktree", "prune"])
+        # worktree remove 没认这个路径（物理目录还在）就强删
+        if path.exists():
+            _force_rmtree(path)
 
     async def _cleanup_residual_branch(self, branch: str) -> None:
         """如果分支已存在（上次跑残留），强删。无锁内部调用。"""
