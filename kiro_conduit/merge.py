@@ -329,8 +329,14 @@ class MergeOrchestrator:
                 ":(exclude).ruff_cache",
             ],
         )
+        # git add 对被 .gitignore 忽略的路径会返回非 0，但合法文件仍会被 staged。
+        # 不抛错——下面用 diff --cached 判断是否真有内容可提交。
         if code != 0:
-            raise MergeError(f"git add failed in {handle.path}: {stderr.strip()}")
+            logger.debug(
+                "[merge] add reported ignored paths in %s (continuing): %s",
+                handle.path,
+                stderr.strip(),
+            )
 
         # 看看有没有改动
         code, stdout, _ = await run_git(handle.path, ["diff", "--cached", "--name-only"])

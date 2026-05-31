@@ -462,13 +462,14 @@ class ParallelOrchestrator:
                 ":(exclude)**/.pytest_cache",
             ],
         )
+        # git add 对被目标仓库 .gitignore 忽略的路径会返回非 0，但合法文件仍会被 staged。
+        # 不能因此放弃提交——下面用 diff --cached 判断是否真有内容可提交。
         if code != 0:
-            logger.warning(
-                "[orchestrator] commit add failed for %s: %s",
+            logger.debug(
+                "[orchestrator] add reported ignored paths for %s (continuing): %s",
                 wt.task_id,
                 stderr.strip(),
             )
-            return
         # 检查有没有改动
         code, stdout, _ = await run_git(wt.path, ["diff", "--cached", "--name-only"])
         if not stdout.strip():

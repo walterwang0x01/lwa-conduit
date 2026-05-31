@@ -472,6 +472,48 @@ class TestParallelOrchestrator:
         assert orch._isolation_env("a") == envs["a"]
 
     @pytest.mark.asyncio
+    async def test_commit_task_survives_gitignored_files(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """worktree 里有被 .gitignore 忽略的文件（git add 返回非 0）时，
+        仍应提交合法文件，而不是放弃（修复 add-failed→空分支 的 bug）。"""
+        from kiro_conduit.worktree import WorktreeManager
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(dag)
+        orch = ParallelOrchestrator(ws, real_repo)
+        async with WorktreeManager(real_repo) as wm:
+            wt = await wm.create("t1")
+            (wt.path / ".gitignore").write_text("*.log\n")
+            (wt.path / "real.py").write_text("x = 1\n")
+            (wt.path / "debug.log").write_text("noise\n")  # 被忽略，会让 git add 报非 0
+            await orch._commit_task(wt)
+            # 合法文件应已提交到分支，noise 不在
+            out = subprocess.run(
+                ["git", "show", "kiro-conduit/t1:real.py"],
+                cwd=real_repo, capture_output=True, text=True,
+            )
+            assert out.returncode == 0 and out.stdout == "x = 1\n"
+            ignored = subprocess.run(
+                ["git", "show", "kiro-conduit/t1:debug.log"],
+                cwd=real_repo, capture_output=True, text=True,
+            )
+            assert ignored.returncode != 0  # 被忽略的文件没进提交
+
+    @pytest.mark.asyncio
     async def test_interrupt_keeps_branches_for_resume(
         self, real_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
