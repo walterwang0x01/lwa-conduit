@@ -63,6 +63,17 @@ def write_workspace_with_specs(tmp_path: Path, dag_yaml: str) -> Path:
     return dag
 
 
+def init_git_repo(path: Path) -> None:
+    """初始化一个带初始提交的最小 git repo。"""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=path, capture_output=True)
+    (path / "README.md").write_text("base\n")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+
+
 # ---------------------------------------------------------------------------
 # Helpers: 用 monkeypatch 替换 _run_one_task
 # ---------------------------------------------------------------------------
@@ -347,6 +358,46 @@ class TestParallelOrchestrator:
         assert report2.all_passed
         # t1 的 worktree 被 resume 重建，handle 可供 merge 阶段用
         assert "t1" in report2.handles
+
+    @pytest.mark.asyncio
+    async def test_cross_repo_routing(
+        self, real_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """t1（默认仓库）落 base_repo，t2（repo: other）落 other 仓库。"""
+        other = tmp_path / "other_repo"
+        init_git_repo(other)
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            f"""
+            repos:
+              other: {other}
+            phases:
+              - name: A
+                type: parallel
+                tasks: [t1, t2]
+            tasks:
+              t1: {{spec: specs/t1.md}}
+              t2: {{spec: specs/t2.md, repo: other}}
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(dag)
+
+        async def fake(self, task_def, wm, lock_manager, sem, base_branch, owner_handles=None):  # type: ignore[no-untyped-def]
+            async with sem:
+                await wm.create(task_def.id, base_branch=base_branch)
+                return make_outcome(task_def.id, passed=True)
+
+        monkeypatch.setattr(ParallelOrchestrator, "_run_one_task", fake)
+
+        report = await ParallelOrchestrator(ws, real_repo).run()
+
+        assert report.all_passed
+        assert str(report.handles["t1"].path).startswith(str(real_repo))
+        assert str(report.handles["t2"].path).startswith(str(other))
 
     @pytest.mark.asyncio
     async def test_constructor_validation(self, real_repo: Path, tmp_path: Path) -> None:

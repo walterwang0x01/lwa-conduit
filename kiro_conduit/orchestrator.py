@@ -141,9 +141,11 @@ class ParallelOrchestrator:
         failed_tasks: set[str] = set()
         handles: dict[str, WorktreeHandle] = {}
 
-        # 注意：不进 WorktreeManager 的 async-with，因为我们不希望它自动清理
-        wm = WorktreeManager(self._base_repo)
-        await wm.__aenter__()
+        # per-repo WorktreeManager：repo=None 用 base_repo，其余按 workspace.repos 解析。
+        # 不进 async-with，因为我们不希望它自动清理（merge 阶段还要用）。
+        managers = self._build_managers()
+        for mgr in managers.values():
+            await mgr.__aenter__()
         try:
             lock_manager = SharedFileLockManager(
                 self._workspace, self._base_repo, event_bus=self._event_bus
@@ -160,6 +162,7 @@ class ParallelOrchestrator:
                 wave_to_run: list[str] = []
                 for tid in wave_runnable:
                     if tid in resume_passed:
+                        wm = managers[self._workspace.task(tid).repo]
                         wt = await wm.create(tid, reuse_branch=True)
                         handles[tid] = wt
                         outcomes[tid] = self._make_resumed_outcome(
@@ -206,7 +209,7 @@ class ParallelOrchestrator:
                     *(
                         self._run_one_task(
                             self._workspace.task(tid),
-                            wm,
+                            managers[self._workspace.task(tid).repo],
                             lock_manager,
                             sem,
                             base_branch,
@@ -231,6 +234,7 @@ class ParallelOrchestrator:
 
                 # 收集这波的 handles（成功失败都收，调用方按需用）
                 for tid in wave_to_run:
+                    wm = managers[self._workspace.task(tid).repo]
                     h = wm._handles.get(tid)
                     if h is not None:
                         handles[tid] = h
@@ -239,8 +243,9 @@ class ParallelOrchestrator:
                 self._persist_state(state, state_file, outcomes, skipped, handles)
         except BaseException:
             # 异常时清理（防 worktree 泄漏）
-            await wm.cleanup_all()
-            await wm.__aexit__(None, None, None)
+            for mgr in managers.values():
+                await mgr.cleanup_all()
+                await mgr.__aexit__(None, None, None)
             raise
 
         # 正常路径：不清理，留给调用方
@@ -259,10 +264,13 @@ class ParallelOrchestrator:
         return report
 
     async def cleanup_handles(self, handles: dict[str, WorktreeHandle]) -> None:
-        """显式清理 worktree（merge 完成后调用）。"""
-        wm = WorktreeManager(self._base_repo)
-        wm._handles = dict(handles)
-        await wm.cleanup_all()
+        """显式清理 worktree（merge 完成后调用）。按 task.repo 路由到对应仓库。"""
+        managers = self._build_managers()
+        for tid, handle in handles.items():
+            repo = self._workspace.tasks[tid].repo if tid in self._workspace.tasks else None
+            managers[repo]._handles[tid] = handle
+        for mgr in managers.values():
+            await mgr.cleanup_all()
 
     # ------------------------------------------------------------ internal
 
@@ -270,6 +278,23 @@ class ParallelOrchestrator:
         """转发事件给可选的 EventBus（None 时无操作）。"""
         if self._event_bus is not None:
             self._event_bus.publish(event)  # type: ignore[arg-type]
+
+    def _resolve_repo_path(self, name: str) -> Path:
+        """把 workspace.repos[name] 的路径串解析成绝对路径（相对则基于 workspace_root）。"""
+        p = Path(self._workspace.repos[name])
+        if not p.is_absolute():
+            p = (self._workspace.workspace_root / p).resolve()
+        return p
+
+    def _build_managers(self) -> dict[str | None, WorktreeManager]:
+        """构建 per-repo WorktreeManager：key=None 用 base_repo（task.repo 缺省），
+        其余按 workspace.repos 解析。单仓库（无 repos）时只有 None 一个 manager。"""
+        managers: dict[str | None, WorktreeManager] = {
+            None: WorktreeManager(self._base_repo)
+        }
+        for name in self._workspace.repos:
+            managers[name] = WorktreeManager(self._resolve_repo_path(name))
+        return managers
 
     def _persist_state(
         self,
