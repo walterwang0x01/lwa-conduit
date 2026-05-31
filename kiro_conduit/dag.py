@@ -44,7 +44,7 @@ dag.yaml 示例（最小）：
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -92,6 +92,7 @@ class TaskDef:
     max_lines: int = 800
     max_files: int = 12
     acceptance: tuple[str, ...] = ()
+    repo: str | None = None  # 跨仓库：所属仓库名（须在 Workspace.repos）；None=默认仓库
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +142,7 @@ class Workspace:
     tasks: dict[str, TaskDef]
     shared_files: tuple[SharedFileSpec, ...]
     workspace_root: Path  # dag.yaml 所在目录，用于解析相对路径
+    repos: dict[str, str] = field(default_factory=dict)  # 跨仓库：仓库名 → 路径
 
     def task(self, task_id: str) -> TaskDef:
         if task_id not in self.tasks:
@@ -181,12 +183,27 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
     phases = _parse_phases(raw.get("phases", []))
     tasks = _parse_tasks(raw.get("tasks", {}))
     shared_files = _parse_shared_files(raw.get("shared_files", []))
+    repos = _parse_repos(raw.get("repos", {}))
     return Workspace(
         phases=phases,
         tasks=tasks,
         shared_files=shared_files,
         workspace_root=workspace_root,
+        repos=repos,
     )
+
+
+def _parse_repos(raw_repos: Any) -> dict[str, str]:
+    if not isinstance(raw_repos, dict):
+        raise DagError(f"repos must be a mapping, got {type(raw_repos).__name__}")
+    out: dict[str, str] = {}
+    for name, path in raw_repos.items():
+        if not isinstance(name, str) or not name:
+            raise DagError("repos keys must be non-empty strings")
+        if not isinstance(path, str) or not path:
+            raise DagError(f"repos[{name!r}] must be a non-empty path string")
+        out[name] = path
+    return out
 
 
 def _parse_phases(raw_phases: Any) -> tuple[PhaseDef, ...]:
@@ -352,6 +369,10 @@ def _parse_task(tid: str, body: dict[str, Any]) -> TaskDef:
     if not isinstance(acceptance, list) or not all(isinstance(a, str) for a in acceptance):
         raise DagError(f"task {tid!r} acceptance must be a list of strings")
 
+    repo = body.get("repo")
+    if repo is not None and (not isinstance(repo, str) or not repo):
+        raise DagError(f"task {tid!r} repo must be a non-empty string")
+
     return TaskDef(
         id=tid,
         spec=spec,
@@ -361,6 +382,7 @@ def _parse_task(tid: str, body: dict[str, Any]) -> TaskDef:
         max_lines=max_lines,
         max_files=max_files,
         acceptance=tuple(acceptance),
+        repo=repo,
     )
 
 
@@ -405,6 +427,17 @@ def validate(workspace: Workspace) -> None:
     _check_files_owned_no_overlap(workspace)
     _check_shared_files_declared(workspace)
     _check_interface_locks(workspace)
+    _check_task_repos_declared(workspace)
+
+
+def _check_task_repos_declared(workspace: Workspace) -> None:
+    """task.repo 若设置，必须在 workspace.repos 里声明。"""
+    for tid, t in workspace.tasks.items():
+        if t.repo is not None and t.repo not in workspace.repos:
+            raise DagError(
+                f"task {tid!r} references undeclared repo {t.repo!r}; "
+                f"declared repos: {sorted(workspace.repos)}"
+            )
 
 
 def _check_phase_tasks_exist(workspace: Workspace) -> None:

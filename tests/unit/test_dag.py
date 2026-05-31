@@ -614,3 +614,72 @@ class TestInterfaceLock:
         """
         with pytest.raises(DagError, match="both owner and consumer"):
             load_workspace(write_dag(tmp_path, body))
+
+
+class TestCrossRepoSchema:
+    def test_default_no_repos(self, tmp_path: Path) -> None:
+        """不声明 repos 时：repos 为空、task.repo 为 None（行为不变）。"""
+        ws = load_workspace(write_dag(tmp_path, minimal_yaml()))
+        assert ws.repos == {}
+        assert ws.tasks["t1"].repo is None
+
+    def test_repos_and_task_repo_parsed(self, tmp_path: Path) -> None:
+        ws = load_workspace(
+            write_dag(
+                tmp_path,
+                """
+                repos:
+                  api: ../api-repo
+                  web: ../web-repo
+                phases:
+                  - name: only
+                    type: parallel
+                    tasks: [t1, t2]
+                tasks:
+                  t1: {spec: specs/t1.md, repo: api}
+                  t2: {spec: specs/t2.md, repo: web}
+                shared_files: []
+                """,
+            )
+        )
+        assert ws.repos == {"api": "../api-repo", "web": "../web-repo"}
+        assert ws.tasks["t1"].repo == "api"
+        assert ws.tasks["t2"].repo == "web"
+
+    def test_undeclared_repo_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(DagError, match="undeclared repo"):
+            load_workspace(
+                write_dag(
+                    tmp_path,
+                    """
+                    repos:
+                      api: ../api-repo
+                    phases:
+                      - name: only
+                        type: serial
+                        tasks: [t1]
+                    tasks:
+                      t1: {spec: specs/t1.md, repo: nope}
+                    shared_files: []
+                    """,
+                )
+            )
+
+    def test_repos_path_must_be_string(self, tmp_path: Path) -> None:
+        with pytest.raises(DagError, match="must be a non-empty path string"):
+            load_workspace(
+                write_dag(
+                    tmp_path,
+                    """
+                    repos:
+                      api: 123
+                    phases:
+                      - name: only
+                        type: serial
+                        tasks: [t1]
+                    tasks:
+                      t1: {spec: specs/t1.md}
+                    shared_files: []
+                    """,
+                )
+            )
