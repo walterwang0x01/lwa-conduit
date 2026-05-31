@@ -111,10 +111,13 @@ async def _run(args: argparse.Namespace) -> int:
     _print_parallel_report(ws, report)
 
     if not report.all_passed:
-        print("\n✗ not all tasks passed; skipping merge phase")
+        print("\n✗ not all tasks passed; not merging")
+        _print_review_hint(report, base_branch)
         return 1
-    if args.no_merge:
-        print("\n• --no-merge set: stopping after parallel phase")
+
+    if not args.merge:
+        # 默认：产出分支供 review，不自动合并（review-and-accept）
+        _print_review_hint(report, base_branch)
         return 0
 
     successful = {tid for tid, out in report.outcomes.items() if out.passed}
@@ -126,6 +129,22 @@ async def _run(args: argparse.Namespace) -> int:
     )
     _print_merge_report(merge_report)
     return 0 if merge_report.all_merged else 1
+
+
+def _print_review_hint(report: ParallelRunReport, base_branch: str) -> None:
+    """打印产出的 task 分支 + 如何 review / 合并（默认不自动合时用）。"""
+    passed = [
+        (tid, report.handles[tid].branch)
+        for tid, out in sorted(report.outcomes.items())
+        if out.passed and tid in report.handles
+    ]
+    if not passed:
+        return
+    print("\n产出分支（未合并，供 review）:")
+    for tid, branch in passed:
+        print(f"  {tid}: {branch}")
+    print(f"\n  查看改动:  git diff {base_branch}...<branch>")
+    print("  合并:      重跑时加 --merge（或自行 git merge / 开 PR）")
 
 
 async def _resolve_base_branch(base_repo: Path, override: str | None) -> str:
@@ -169,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
         help="capture structured conflict diagnostics on merge failure",
     )
     run_p.add_argument(
-        "--no-merge", action="store_true", help="stop after the parallel phase",
+        "--merge", action="store_true",
+        help="merge passed task branches into the base branch "
+             "(default: leave branches for review)",
     )
 
     args = parser.parse_args(argv)

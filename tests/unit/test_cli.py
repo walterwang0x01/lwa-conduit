@@ -90,7 +90,8 @@ class TestMain:
             )
 
         monkeypatch.setattr(ParallelOrchestrator, "run", fake_run)
-        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path), "--no-merge"])
+        # 默认即 review 模式（不合并）
+        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path)])
         assert code == 0
 
     def test_run_full_invokes_merge(
@@ -115,7 +116,7 @@ class TestMain:
 
         monkeypatch.setattr(ParallelOrchestrator, "run", fake_run)
         monkeypatch.setattr(MergeOrchestrator, "merge", fake_merge)
-        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path)])
+        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path), "--merge"])
         assert code == 0
         assert merged.get("called") is True
 
@@ -144,7 +145,7 @@ class TestMain:
             )
 
         monkeypatch.setattr(ParallelOrchestrator, "run", fake_run)
-        code = main(["run", "--workspace", str(ws), "--base-repo", str(repo), "--no-merge"])
+        code = main(["run", "--workspace", str(ws), "--base-repo", str(repo)])
         assert code == 0
         assert captured["bb"] == "feature/x"  # 跟随当前分支，不是 main
 
@@ -167,6 +168,7 @@ class TestMain:
 
         monkeypatch.setattr(ParallelOrchestrator, "run", fake_run)
         monkeypatch.setattr(MergeOrchestrator, "merge", fake_merge)
-        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path)])
+        # 即使显式 --merge，任务失败也应短路，不进 merge
+        code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path), "--merge"])
         assert code == 1
         assert called["merge"] is False  # 失败时不该进 merge
