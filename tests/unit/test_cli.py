@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 
@@ -117,6 +118,35 @@ class TestMain:
         code = main(["run", "--workspace", str(ws), "--base-repo", str(tmp_path)])
         assert code == 0
         assert merged.get("called") is True
+
+    def test_base_branch_defaults_to_current_branch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ws = _write_ws(tmp_path)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, capture_output=True)
+        (repo / "f").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "i"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "checkout", "-b", "feature/x"], cwd=repo, check=True, capture_output=True
+        )
+
+        captured: dict[str, str] = {}
+
+        async def fake_run(self, base_branch: str = "main") -> ParallelRunReport:  # type: ignore[no-untyped-def]
+            captured["bb"] = base_branch
+            return ParallelRunReport(
+                outcomes={"t1": _passing("t1")}, skipped=(), handles={}
+            )
+
+        monkeypatch.setattr(ParallelOrchestrator, "run", fake_run)
+        code = main(["run", "--workspace", str(ws), "--base-repo", str(repo), "--no-merge"])
+        assert code == 0
+        assert captured["bb"] == "feature/x"  # 跟随当前分支，不是 main
 
     def test_run_failed_tasks_skip_merge_exit1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

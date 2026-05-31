@@ -19,6 +19,7 @@ from pathlib import Path
 
 from kiro_conduit.dag import Workspace, load_workspace
 from kiro_conduit.events import EventBus
+from kiro_conduit.git_utils import run_git
 from kiro_conduit.merge import MergeOrchestrator, MergeReport
 from kiro_conduit.orchestrator import ParallelOrchestrator, ParallelRunReport
 
@@ -88,6 +89,8 @@ async def _run(args: argparse.Namespace) -> int:
     )
     print(f"✓ workspace: {dag_path}")
     print(f"  base repo: {base_repo}")
+    base_branch = await _resolve_base_branch(base_repo, args.base_branch)
+    print(f"  base branch: {base_branch}")
     summary = f"  {len(ws.tasks)} tasks, {len(ws.phases)} phases"
     if ws.repos:
         summary += f", repos: {sorted(ws.repos)}"
@@ -104,7 +107,7 @@ async def _run(args: argparse.Namespace) -> int:
         event_bus=bus,
     )
 
-    report = await _run_parallel(orch, ws, bus, args.base_branch)
+    report = await _run_parallel(orch, ws, bus, base_branch)
     _print_parallel_report(ws, report)
 
     if not report.all_passed:
@@ -119,10 +122,22 @@ async def _run(args: argparse.Namespace) -> int:
     merge_report = await merger.merge(
         handles=report.handles,
         successful_task_ids=successful,
-        base_branch=args.base_branch,
+        base_branch=base_branch,
     )
     _print_merge_report(merge_report)
     return 0 if merge_report.all_merged else 1
+
+
+async def _resolve_base_branch(base_repo: Path, override: str | None) -> str:
+    """base 分支：显式 --base-branch 优先；否则跟随 base_repo 当前分支；探测不到回退 main。"""
+    if override:
+        return override
+    code, out, _ = await run_git(base_repo, ["rev-parse", "--abbrev-ref", "HEAD"])
+    cur = out.strip()
+    if code == 0 and cur and cur != "HEAD":
+        return cur
+    logger.warning("[cli] could not detect current branch; falling back to 'main'")
+    return "main"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -140,7 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         "--base-repo", default=None,
         help="git repo to run against (default: the workspace directory)",
     )
-    run_p.add_argument("--base-branch", default="main", help="base branch (default: main)")
+    run_p.add_argument(
+        "--base-branch", default=None,
+        help="branch to base work on / integrate into (default: the repo's current branch)",
+    )
     run_p.add_argument("--max-concurrency", type=int, default=4)
     run_p.add_argument("--max-attempts", type=int, default=3)
     run_p.add_argument("--kiro-cli", default="kiro-cli", help="path to kiro-cli binary")
