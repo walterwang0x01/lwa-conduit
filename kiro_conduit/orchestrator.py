@@ -279,13 +279,6 @@ class ParallelOrchestrator:
         if self._event_bus is not None:
             self._event_bus.publish(event)  # type: ignore[arg-type]
 
-    def _resolve_repo_path(self, name: str) -> Path:
-        """把 workspace.repos[name] 的路径串解析成绝对路径（相对则基于 workspace_root）。"""
-        p = Path(self._workspace.repos[name])
-        if not p.is_absolute():
-            p = (self._workspace.workspace_root / p).resolve()
-        return p
-
     def _build_managers(self) -> dict[str | None, WorktreeManager]:
         """构建 per-repo WorktreeManager：key=None 用 base_repo（task.repo 缺省），
         其余按 workspace.repos 解析。单仓库（无 repos）时只有 None 一个 manager。"""
@@ -293,7 +286,7 @@ class ParallelOrchestrator:
             None: WorktreeManager(self._base_repo)
         }
         for name in self._workspace.repos:
-            managers[name] = WorktreeManager(self._resolve_repo_path(name))
+            managers[name] = WorktreeManager(self._workspace.resolved_repo_path(name))
         return managers
 
     def _persist_state(

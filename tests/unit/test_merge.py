@@ -16,6 +16,17 @@ from kiro_conduit.merge import MergeOrchestrator
 from kiro_conduit.worktree import WorktreeManager
 
 
+def init_repo(path: Path) -> None:
+    """初始化一个带初始提交的最小 git repo。"""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=path, capture_output=True)
+    (path / "README.md").write_text("base\n")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+
+
 @pytest.fixture
 def base_repo(tmp_path: Path) -> Path:
     """初始化一个真 git repo 作 base。"""
@@ -213,6 +224,53 @@ class TestMergeOrchestrator:
 
             assert not report.results["t3"].merged
             assert report.results["t3"].diagnostic is None
+
+    @pytest.mark.asyncio
+    async def test_cross_repo_merge(self, base_repo: Path, tmp_path: Path) -> None:
+        """t1 落 base_repo、t2 落 other 仓库，各自 merge 回自己的 main。"""
+        other = tmp_path / "other"
+        init_repo(other)
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        body = dedent(
+            f"""
+            repos:
+              other: {other}
+            phases:
+              - name: A
+                type: parallel
+                tasks: [t1, t2]
+            tasks:
+              t1: {{spec: specs/t1.md}}
+              t2: {{spec: specs/t2.md, repo: other}}
+            shared_files: []
+            """
+        ).lstrip()
+        (ws_dir / "dag.yaml").write_text(body, encoding="utf-8")
+        specs = ws_dir / "specs"
+        specs.mkdir()
+        (specs / "t1.md").write_text("t1\n")
+        (specs / "t2.md").write_text("t2\n")
+        ws = load_workspace(ws_dir / "dag.yaml")
+
+        async with WorktreeManager(base_repo) as wm_base, WorktreeManager(other) as wm_other:
+            h1 = await wm_base.create("t1")
+            (h1.path / "t1.txt").write_text("from t1\n")
+            h2 = await wm_other.create("t2")
+            (h2.path / "t2.txt").write_text("from t2\n")
+
+            mo = MergeOrchestrator(ws, base_repo)
+            report = await mo.merge(
+                handles={"t1": h1, "t2": h2},
+                successful_task_ids={"t1", "t2"},
+            )
+
+            assert report.all_merged
+            assert (base_repo / "t1.txt").is_file()
+            assert (other / "t2.txt").is_file()
+            # t2 的改动不该落到 base_repo
+            assert not (base_repo / "t2.txt").exists()
 
     @pytest.mark.asyncio
     async def test_no_changes_in_worktree_skipped(

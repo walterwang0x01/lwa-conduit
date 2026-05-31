@@ -155,6 +155,13 @@ class Workspace:
                 return sf
         return None
 
+    def resolved_repo_path(self, name: str) -> Path:
+        """把 repos[name] 的路径串解析成绝对路径（相对则基于 workspace_root）。"""
+        p = Path(self.repos[name])
+        if not p.is_absolute():
+            p = (self.workspace_root / p).resolve()
+        return p
+
 
 # ---------------------------------------------------------------------------
 # 加载（YAML → 数据类型，含基本格式校验）

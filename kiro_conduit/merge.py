@@ -115,15 +115,17 @@ class MergeOrchestrator:
 
         results: dict[str, TaskMergeResult] = {}
         stopped_at: str | None = None
+        # 按仓库隔离失败：某 repo 冲突后只跳过该 repo 的后续 task，其他 repo 继续。
+        failed_repos: set[str | None] = set()
 
         async with self._git_lock:
             for tid in order:
-                if stopped_at is not None:
-                    # 一旦停下，剩下的不再尝试（保证状态可控）
+                repo = self._repo_of(tid)
+                if repo in failed_repos:
                     results[tid] = TaskMergeResult(
                         task_id=tid,
                         merged=False,
-                        error=f"skipped: previous task {stopped_at!r} failed",
+                        error=f"skipped: earlier task in repo {repo!r} failed",
                     )
                     continue
 
@@ -132,13 +134,16 @@ class MergeOrchestrator:
                     results[tid] = TaskMergeResult(
                         task_id=tid, merged=False, error="no worktree handle"
                     )
-                    stopped_at = tid
+                    failed_repos.add(repo)
+                    stopped_at = stopped_at or tid
                     continue
 
                 msg = commit_messages.get(tid, f"kiro-conduit: {tid}")
                 self._publish_merge_started(tid)
                 try:
-                    await self._merge_one(handle, base_branch, msg)
+                    await self._merge_one(
+                        handle, self._repo_path_for(tid), base_branch, msg
+                    )
                     results[tid] = TaskMergeResult(task_id=tid, merged=True)
                     self._publish_merge_finished(tid, merged=True, error=None)
                 except MergeError as exc:
@@ -150,11 +155,22 @@ class MergeOrchestrator:
                         diagnostic=exc.diagnostic,
                     )
                     self._publish_merge_finished(tid, merged=False, error=str(exc))
-                    stopped_at = tid
+                    failed_repos.add(repo)
+                    stopped_at = stopped_at or tid
 
         return MergeReport(results=results, stopped_at=stopped_at)
 
     # ------------------------------------------------------------ internal
+
+    def _repo_of(self, task_id: str) -> str | None:
+        """task 所属仓库名（None=默认 base_repo）。"""
+        t = self._workspace.tasks.get(task_id)
+        return t.repo if t is not None else None
+
+    def _repo_path_for(self, task_id: str) -> Path:
+        """task 所属仓库的实际路径（repo=None 用 base_repo）。"""
+        repo = self._repo_of(task_id)
+        return self._base_repo if repo is None else self._workspace.resolved_repo_path(repo)
 
     def _publish_merge_started(self, task_id: str) -> None:
         if self._event_bus is None:
@@ -186,31 +202,28 @@ class MergeOrchestrator:
         return order
 
     async def _merge_one(
-        self, handle: WorktreeHandle, base_branch: str, commit_message: str
+        self,
+        handle: WorktreeHandle,
+        repo_path: Path,
+        base_branch: str,
+        commit_message: str,
     ) -> None:
-        """对单个 worktree 做：commit -> rebase -> merge。"""
+        """对单个 worktree 做：commit -> merge（在 repo_path 这个仓库上操作）。"""
         # 1) 在 worktree 里 commit 改动（如果有）
         await self._commit_worktree(handle, commit_message)
 
-        # 2) 切到 worktree 对应分支，rebase onto base
-        # 注意：worktree 自身的工作目录是 detached/branch 状态，我们直接在 base_repo 操作分支
+        # 2) 在该仓库上 checkout base_branch
         code, _stdout, stderr = await run_git(
-            self._base_repo, ["fetch", ".", base_branch]
-        )
-        # local fetch 会失败（没 remote），忽略——直接用 refs/heads/base_branch 也行
-
-        # 3) 在 base_repo 上 checkout base_branch
-        code, _stdout, stderr = await run_git(
-            self._base_repo, ["checkout", base_branch]
+            repo_path, ["checkout", base_branch]
         )
         if code != 0:
             raise MergeError(
                 f"checkout {base_branch} failed: {stderr.strip()}"
             )
 
-        # 4) merge 该 task 分支 (--no-ff 保留并行历史)
+        # 3) merge 该 task 分支 (--no-ff 保留并行历史)
         code, stdout, stderr = await run_git(
-            self._base_repo,
+            repo_path,
             [
                 "merge",
                 "--no-ff",
@@ -222,23 +235,25 @@ class MergeOrchestrator:
         if code != 0:
             # 冲突：诊断模式下先抓取冲突信息，再 abort 让 base 回到 clean 状态
             diagnostic = (
-                await self._capture_conflict_diagnostic() if self._diagnose else None
+                await self._capture_conflict_diagnostic(repo_path)
+                if self._diagnose
+                else None
             )
-            await run_git(self._base_repo, ["merge", "--abort"])
+            await run_git(repo_path, ["merge", "--abort"])
             raise MergeError(
                 f"merge {handle.branch} into {base_branch} conflicted: "
                 f"{stderr.strip() or stdout.strip()}",
                 diagnostic=diagnostic,
             )
 
-    async def _capture_conflict_diagnostic(self) -> MergeDiagnostic:
+    async def _capture_conflict_diagnostic(self, repo_path: Path) -> MergeDiagnostic:
         """在 merge --abort 之前抓取当前冲突状态（诊断模式专用）。"""
         _code, files_out, _err = await run_git(
-            self._base_repo, ["diff", "--name-only", "--diff-filter=U"]
+            repo_path, ["diff", "--name-only", "--diff-filter=U"]
         )
         files = tuple(f for f in files_out.splitlines() if f.strip())
         _code, detail, _err = await run_git(
-            self._base_repo, ["diff", "--diff-filter=U"]
+            repo_path, ["diff", "--diff-filter=U"]
         )
         return MergeDiagnostic(conflicted_files=files, detail=detail.strip())
 
