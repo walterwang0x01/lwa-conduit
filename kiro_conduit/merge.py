@@ -3,9 +3,10 @@
 设计要点（来自 ARCHITECTURE.md 模式 6）：
 - 严格串行：行业共识"自动语义冲突解决不可靠"，所以遇到冲突就停下交人工
 - 顺序：拓扑序（depends_on 在前）
-- 每个分支：先在 base_repo 上 commit worktree 改动 → checkout 该分支 → rebase onto main →
-  checkout main → merge --no-ff
-- 失败处理：rebase / merge 冲突 → 标记冲突，停下并把信息返回给调用方
+- 每个分支：先在 task worktree 内 commit 改动 → 在一个独立的 integration worktree 里
+  `merge --no-ff`（绝不 checkout/切换用户的主工作区；base 分支若正被主工作区检出，
+  则把结果合到 kiro-conduit/integration 分支供人工 review）
+- 失败处理：merge 冲突 → 在 integration worktree 内 abort，标记冲突并返回给调用方
 - 集成测试在每次 merge 后跑（M1.0 暂用 task.acceptance；M1.1 可单独配 integration tests）
 
 M1.0 范围：
@@ -117,46 +118,55 @@ class MergeOrchestrator:
         stopped_at: str | None = None
         # 按仓库隔离失败：某 repo 冲突后只跳过该 repo 的后续 task，其他 repo 继续。
         failed_repos: set[str | None] = set()
+        # 每个 repo 一个 integration worktree（懒创建）：merge 在这里做，绝不碰主工作区。
+        integration: dict[Path, Path] = {}
 
         async with self._git_lock:
-            for tid in order:
-                repo = self._repo_of(tid)
-                if repo in failed_repos:
-                    results[tid] = TaskMergeResult(
-                        task_id=tid,
-                        merged=False,
-                        error=f"skipped: earlier task in repo {repo!r} failed",
-                    )
-                    continue
+            try:
+                for tid in order:
+                    repo = self._repo_of(tid)
+                    if repo in failed_repos:
+                        results[tid] = TaskMergeResult(
+                            task_id=tid,
+                            merged=False,
+                            error=f"skipped: earlier task in repo {repo!r} failed",
+                        )
+                        continue
 
-                handle = handles.get(tid)
-                if handle is None:
-                    results[tid] = TaskMergeResult(
-                        task_id=tid, merged=False, error="no worktree handle"
-                    )
-                    failed_repos.add(repo)
-                    stopped_at = stopped_at or tid
-                    continue
+                    handle = handles.get(tid)
+                    if handle is None:
+                        results[tid] = TaskMergeResult(
+                            task_id=tid, merged=False, error="no worktree handle"
+                        )
+                        failed_repos.add(repo)
+                        stopped_at = stopped_at or tid
+                        continue
 
-                msg = commit_messages.get(tid, f"kiro-conduit: {tid}")
-                self._publish_merge_started(tid)
-                try:
-                    await self._merge_one(
-                        handle, self._repo_path_for(tid), base_branch, msg
-                    )
-                    results[tid] = TaskMergeResult(task_id=tid, merged=True)
-                    self._publish_merge_finished(tid, merged=True, error=None)
-                except MergeError as exc:
-                    logger.error("[merge] %s failed: %s", tid, exc)
-                    results[tid] = TaskMergeResult(
-                        task_id=tid,
-                        merged=False,
-                        error=str(exc),
-                        diagnostic=exc.diagnostic,
-                    )
-                    self._publish_merge_finished(tid, merged=False, error=str(exc))
-                    failed_repos.add(repo)
-                    stopped_at = stopped_at or tid
+                    msg = commit_messages.get(tid, f"kiro-conduit: {tid}")
+                    self._publish_merge_started(tid)
+                    try:
+                        repo_path = self._repo_path_for(tid)
+                        int_wt = integration.get(repo_path)
+                        if int_wt is None:
+                            int_wt = await self._ensure_integration(repo_path, base_branch)
+                            integration[repo_path] = int_wt
+                        await self._merge_one(handle, int_wt, base_branch, msg)
+                        results[tid] = TaskMergeResult(task_id=tid, merged=True)
+                        self._publish_merge_finished(tid, merged=True, error=None)
+                    except MergeError as exc:
+                        logger.error("[merge] %s failed: %s", tid, exc)
+                        results[tid] = TaskMergeResult(
+                            task_id=tid,
+                            merged=False,
+                            error=str(exc),
+                            diagnostic=exc.diagnostic,
+                        )
+                        self._publish_merge_finished(tid, merged=False, error=str(exc))
+                        failed_repos.add(repo)
+                        stopped_at = stopped_at or tid
+            finally:
+                for repo_path, int_wt in integration.items():
+                    await self._remove_worktree(repo_path, int_wt)
 
         return MergeReport(results=results, stopped_at=stopped_at)
 
@@ -201,45 +211,80 @@ class MergeOrchestrator:
                     order.append(tid)
         return order
 
+    async def _ensure_integration(self, repo_path: Path, base_branch: str) -> Path:
+        """为 repo_path 准备一个 integration worktree（merge 在这里做，绝不碰主工作区）。
+
+        - 若 base_branch 没被主工作区检出：worktree 直接检出 base_branch，merge 推进它。
+        - 若 base_branch 正是主工作区当前分支（用户就坐在上面）：改用独立的
+          `kiro-conduit/integration` 分支承载合并结果，base_branch 与主工作区全程不动，
+          由用户事后 review 再合。
+        """
+        int_path = repo_path / ".kiro-conduit" / "integration"
+        await self._remove_worktree(repo_path, int_path)
+        int_path.parent.mkdir(parents=True, exist_ok=True)
+
+        code, cur, _ = await run_git(
+            repo_path, ["symbolic-ref", "--quiet", "--short", "HEAD"]
+        )
+        current = cur.strip() if code == 0 else None
+
+        if current == base_branch:
+            target = "kiro-conduit/integration"
+            await run_git(repo_path, ["branch", "-D", target])  # 清残留，忽略失败
+            code, _out, stderr = await run_git(
+                repo_path,
+                ["worktree", "add", "-b", target, str(int_path), base_branch],
+            )
+            logger.warning(
+                "[merge] base branch %r is checked out in the working tree; "
+                "integrating onto %r instead — review it and merge into %r yourself",
+                base_branch, target, base_branch,
+            )
+        else:
+            code, _out, stderr = await run_git(
+                repo_path, ["worktree", "add", str(int_path), base_branch]
+            )
+        if code != 0:
+            raise MergeError(
+                f"failed to create integration worktree for {base_branch}: "
+                f"{stderr.strip()}"
+            )
+        return int_path
+
+    async def _remove_worktree(self, repo_path: Path, wt_path: Path) -> None:
+        """移除 integration worktree（best-effort）。不删分支——合并结果要保留。"""
+        if wt_path.exists():
+            await run_git(repo_path, ["worktree", "remove", "--force", str(wt_path)])
+        await run_git(repo_path, ["worktree", "prune"])
+        if wt_path.exists():
+            import shutil
+
+            shutil.rmtree(wt_path, ignore_errors=True)
+
     async def _merge_one(
         self,
         handle: WorktreeHandle,
-        repo_path: Path,
+        int_wt: Path,
         base_branch: str,
         commit_message: str,
     ) -> None:
-        """对单个 worktree 做：commit -> merge（在 repo_path 这个仓库上操作）。"""
-        # 1) 在 worktree 里 commit 改动（如果有）
+        """commit task worktree 改动，再在 integration worktree 里 merge（不碰主工作区）。"""
+        # 1) 在 task worktree 里 commit 改动（如果有）
         await self._commit_worktree(handle, commit_message)
 
-        # 2) 在该仓库上 checkout base_branch
-        code, _stdout, stderr = await run_git(
-            repo_path, ["checkout", base_branch]
-        )
-        if code != 0:
-            raise MergeError(
-                f"checkout {base_branch} failed: {stderr.strip()}"
-            )
-
-        # 3) merge 该 task 分支 (--no-ff 保留并行历史)
+        # 2) 在 integration worktree 里 merge 该 task 分支（--no-ff 保留并行历史）
         code, stdout, stderr = await run_git(
-            repo_path,
-            [
-                "merge",
-                "--no-ff",
-                "-m",
-                commit_message,
-                handle.branch,
-            ],
+            int_wt,
+            ["merge", "--no-ff", "-m", commit_message, handle.branch],
         )
         if code != 0:
-            # 冲突：诊断模式下先抓取冲突信息，再 abort 让 base 回到 clean 状态
+            # 冲突：诊断模式下先抓取冲突信息，再 abort 让 integration worktree 回到 clean
             diagnostic = (
-                await self._capture_conflict_diagnostic(repo_path)
+                await self._capture_conflict_diagnostic(int_wt)
                 if self._diagnose
                 else None
             )
-            await run_git(repo_path, ["merge", "--abort"])
+            await run_git(int_wt, ["merge", "--abort"])
             raise MergeError(
                 f"merge {handle.branch} into {base_branch} conflicted: "
                 f"{stderr.strip() or stdout.strip()}",

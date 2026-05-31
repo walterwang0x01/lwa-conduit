@@ -33,6 +33,15 @@ def _init_repo(path: Path) -> None:
     (path / "README.md").write_text("base\n")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+    # 切到 work：让 base 分支 main 不被检出，merge 走正常 integration 路径推进 main
+    subprocess.run(["git", "checkout", "-b", "work"], cwd=path, check=True, capture_output=True)
+
+
+def _file_on_branch(repo: Path, branch: str, path: str) -> str | None:
+    r = subprocess.run(
+        ["git", "show", f"{branch}:{path}"], cwd=repo, capture_output=True, text=True
+    )
+    return r.stdout if r.returncode == 0 else None
 
 
 def _passing_outcome(task_id: str) -> CoordinatorOutcome:
@@ -121,10 +130,10 @@ async def test_cross_repo_full_pipeline(
     )
     assert merge_report.all_merged
 
-    # 各仓库 main 拿到自己 task 的文件，互不串
-    assert (main_repo / "core.py").is_file()
-    assert (api / "handler.py").is_file()
-    assert (web / "client.ts").is_file()
-    assert not (api / "core.py").exists()
-    assert not (web / "core.py").exists()
-    assert not (main_repo / "handler.py").exists()
+    # 各仓库 main 拿到自己 task 的文件，互不串（查分支内容，不依赖工作区）
+    assert _file_on_branch(main_repo, "main", "core.py") is not None
+    assert _file_on_branch(api, "main", "handler.py") is not None
+    assert _file_on_branch(web, "main", "client.ts") is not None
+    assert _file_on_branch(api, "main", "core.py") is None
+    assert _file_on_branch(web, "main", "core.py") is None
+    assert _file_on_branch(main_repo, "main", "handler.py") is None

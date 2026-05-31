@@ -17,7 +17,7 @@ from kiro_conduit.worktree import WorktreeManager
 
 
 def init_repo(path: Path) -> None:
-    """初始化一个带初始提交的最小 git repo。"""
+    """初始化一个带初始提交的最小 git repo，并切到 work 分支（让 main 不被检出）。"""
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=path, capture_output=True)
@@ -25,6 +25,15 @@ def init_repo(path: Path) -> None:
     (path / "README.md").write_text("base\n")
     subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "-b", "work"], cwd=path, check=True, capture_output=True)
+
+
+def _file_on_branch(repo: Path, branch: str, path: str) -> str | None:
+    """读 <branch>:<path> 的内容（不依赖工作区）。不存在返回 None。"""
+    r = subprocess.run(
+        ["git", "show", f"{branch}:{path}"], cwd=repo, capture_output=True, text=True
+    )
+    return r.stdout if r.returncode == 0 else None
 
 
 @pytest.fixture
@@ -38,6 +47,8 @@ def base_repo(tmp_path: Path) -> Path:
     (tmp_path / "README.md").write_text("base\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+    # 切到 work 分支：让 base 分支 main 不被主工作区检出（走正常 integration 路径）
+    subprocess.run(["git", "checkout", "-b", "work"], cwd=tmp_path, check=True, capture_output=True)
     return tmp_path
 
 
@@ -89,8 +100,8 @@ class TestMergeOrchestrator:
             assert report.all_merged
             assert report.results["t1"].merged
             assert report.stopped_at is None
-            # main 分支上看到 t1 的改动
-            assert (base_repo / "from_t1.txt").is_file()
+            # main 分支上看到 t1 的改动（查分支内容，不依赖工作区）
+            assert _file_on_branch(base_repo, "main", "from_t1.txt") == "hi from t1\n"
 
     @pytest.mark.asyncio
     async def test_merge_multiple_in_topological_order(
@@ -116,7 +127,8 @@ class TestMergeOrchestrator:
 
             assert report.all_merged
             for f in ("t1.txt", "t2.txt", "t3.txt"):
-                assert (base_repo / f).is_file(), f"{f} not on main after merge"
+                assert _file_on_branch(base_repo, "main", f) is not None, \
+                    f"{f} not on main after merge"
 
     @pytest.mark.asyncio
     async def test_skip_unsuccessful_tasks(
@@ -142,8 +154,8 @@ class TestMergeOrchestrator:
             assert report.all_merged
             assert "t1" in report.results
             assert "t2" not in report.results
-            assert (base_repo / "t1.txt").is_file()
-            assert not (base_repo / "t2.txt").is_file()
+            assert _file_on_branch(base_repo, "main", "t1.txt") is not None
+            assert _file_on_branch(base_repo, "main", "t2.txt") is None
 
     @pytest.mark.asyncio
     async def test_conflict_stops_merge(
@@ -198,8 +210,8 @@ class TestMergeOrchestrator:
             assert diag is not None
             assert "README.md" in diag.conflicted_files
             assert "README.md" in diag.to_message()
-            # base 应已回到 clean（abort 生效）
-            assert (base_repo / "README.md").read_text() == "base\nfrom-t2\n"
+            # t2 已合入 main，t3 冲突被 abort（main 只含 t2 的改动）
+            assert _file_on_branch(base_repo, "main", "README.md") == "base\nfrom-t2\n"
 
     @pytest.mark.asyncio
     async def test_no_diagnostic_by_default(
@@ -267,10 +279,62 @@ class TestMergeOrchestrator:
             )
 
             assert report.all_merged
-            assert (base_repo / "t1.txt").is_file()
-            assert (other / "t2.txt").is_file()
+            assert _file_on_branch(base_repo, "main", "t1.txt") is not None
+            assert _file_on_branch(other, "main", "t2.txt") is not None
             # t2 的改动不该落到 base_repo
-            assert not (base_repo / "t2.txt").exists()
+            assert _file_on_branch(base_repo, "main", "t2.txt") is None
+
+    @pytest.mark.asyncio
+    async def test_merge_does_not_touch_working_tree(
+        self, base_repo: Path, tmp_path: Path
+    ) -> None:
+        """D2：用户在 work 分支、有未提交脏改动；merge 回 main 后，当前分支仍是 work、
+        脏改动原样保留、工作区不被切走。"""
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        ws = load_workspace(make_simple_workspace(ws_dir))
+
+        # 制造脏工作区
+        (base_repo / "wip.txt").write_text("uncommitted work\n")
+
+        async with WorktreeManager(base_repo) as wm:
+            h = await wm.create("t1")
+            (h.path / "t1.txt").write_text("t1\n")
+            mo = MergeOrchestrator(ws, base_repo)
+            report = await mo.merge(handles={"t1": h}, successful_task_ids={"t1"})
+
+        assert report.all_merged
+        # main 推进了
+        assert _file_on_branch(base_repo, "main", "t1.txt") is not None
+        # 但用户主工作区：仍在 work、脏文件还在、没被 checkout 走
+        cur = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=base_repo, capture_output=True, text=True,
+        ).stdout.strip()
+        assert cur == "work"
+        assert (base_repo / "wip.txt").read_text() == "uncommitted work\n"
+
+    @pytest.mark.asyncio
+    async def test_base_checked_out_falls_back_to_integration_branch(
+        self, base_repo: Path, tmp_path: Path
+    ) -> None:
+        """当 base 分支正被主工作区检出时，结果合到 kiro-conduit/integration，main 不动。"""
+        # 切回 main（让 base=main 正被检出）
+        subprocess.run(["git", "checkout", "main"], cwd=base_repo, check=True, capture_output=True)
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        ws = load_workspace(make_simple_workspace(ws_dir))
+
+        async with WorktreeManager(base_repo) as wm:
+            h = await wm.create("t1")
+            (h.path / "t1.txt").write_text("t1\n")
+            mo = MergeOrchestrator(ws, base_repo)
+            report = await mo.merge(handles={"t1": h}, successful_task_ids={"t1"})
+
+        assert report.all_merged
+        # 结果在 integration 分支上，main 没动
+        assert _file_on_branch(base_repo, "kiro-conduit/integration", "t1.txt") is not None
+        assert _file_on_branch(base_repo, "main", "t1.txt") is None
 
     @pytest.mark.asyncio
     async def test_no_changes_in_worktree_skipped(
