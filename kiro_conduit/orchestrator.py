@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -89,6 +90,7 @@ class ParallelOrchestrator:
         event_bus: EventBus | None = None,
         resume: bool = False,
         isolation_base_port: int = 4100,
+        setup_timeout: float = 900.0,
     ) -> None:
         if not base_repo.is_absolute():
             raise ValueError(f"base_repo must be absolute, got {base_repo}")
@@ -100,6 +102,7 @@ class ParallelOrchestrator:
         self._max_attempts = max_attempts
         self._kiro_cli_path = kiro_cli_path
         self._prompt_timeout = prompt_timeout
+        self._setup_timeout = setup_timeout
         self._semantic_reviewer = semantic_reviewer
         self._review_timeout = review_timeout
         # BYOA 模型路由：role 名 → model id。已知 role：'implementor'。
@@ -387,6 +390,8 @@ class ParallelOrchestrator:
             wt = await wm.create(task_def.id, base_branch=effective_base)
             # 让 task 站在其依赖的真实产出之上：把每个依赖分支 merge 进本 worktree
             await self._merge_dependencies(wt, task_def, owner_handles)
+            # worktree 备好后跑 setup（装依赖/生成配置等），失败则该 task 失败
+            await self._run_setup(wt, task_def)
             self._publish(
                 TaskStarted(
                     task_id=task_def.id,
@@ -445,6 +450,39 @@ class ParallelOrchestrator:
                 if task_id in lock.consumers and lock.owner in owner_handles:
                     return owner_handles[lock.owner].branch
         return default_base
+
+    async def _run_setup(self, wt: WorktreeHandle, task_def: TaskDef) -> None:
+        """workspace 声明了 setup 命令时，在 worktree 备好后执行（装依赖/生成配置等）。
+
+        在 worktree 目录里跑，注入隔离 env（端口/scratch/task-id）。
+        超时或非 0 退出 → 抛错，作为该 task 的失败上报。
+        """
+        cmd = self._workspace.setup
+        if not cmd:
+            return
+        env = {**os.environ, **self._isolation_env(task_def.id)}
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            cwd=str(wt.path),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            out_b, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=self._setup_timeout
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"task {task_def.id!r} setup timed out after {self._setup_timeout}s"
+            ) from None
+        if proc.returncode:
+            tail = out_b.decode("utf-8", errors="replace").strip()[-500:]
+            raise RuntimeError(
+                f"task {task_def.id!r} setup failed (exit {proc.returncode}): {tail}"
+            )
 
     async def _merge_dependencies(
         self,

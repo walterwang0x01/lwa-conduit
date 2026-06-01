@@ -472,6 +472,62 @@ class TestParallelOrchestrator:
         assert orch._isolation_env("a") == envs["a"]
 
     @pytest.mark.asyncio
+    async def test_run_setup_executes_in_worktree(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """声明 setup 时，在 worktree 里执行该命令（装依赖/生成配置等）。"""
+        from kiro_conduit.worktree import WorktreeManager
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            setup: echo hi > setup-marker.txt
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        orch = ParallelOrchestrator(load_workspace(dag), real_repo)
+        async with WorktreeManager(real_repo) as wm:
+            wt = await wm.create("t1")
+            await orch._run_setup(wt, orch._workspace.task("t1"))
+            assert (wt.path / "setup-marker.txt").is_file()
+
+    @pytest.mark.asyncio
+    async def test_run_setup_failure_raises(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """setup 非 0 退出 → 抛错（作为 task 失败上报）。"""
+        from kiro_conduit.worktree import WorktreeManager
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            setup: exit 3
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        orch = ParallelOrchestrator(load_workspace(dag), real_repo)
+        async with WorktreeManager(real_repo) as wm:
+            wt = await wm.create("t1")
+            with pytest.raises(RuntimeError, match="setup failed"):
+                await orch._run_setup(wt, orch._workspace.task("t1"))
+
+    @pytest.mark.asyncio
     async def test_merge_dependencies_brings_in_dep_code(
         self, real_repo: Path, tmp_path: Path
     ) -> None:

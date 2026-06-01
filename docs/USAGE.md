@@ -109,6 +109,21 @@ kiro-conduit run --workspace my-workspace/ --merge
 | `--max-attempts N` | 单 task 失败重试上限（默认 3） |
 | `--kiro-cli <path>` | kiro-cli 可执行文件路径（默认 `kiro-cli`） |
 
+## 每个 worktree 的准备（`setup`）
+
+每个 task 在自己的 git worktree 里跑。若项目需要 per-worktree 准备（装依赖、生成
+配置、起本地服务），在 `dag.yaml` 顶层声明 `setup` 命令——**每个 worktree 创建后、
+agent 动手前**在该 worktree 目录里执行一次，并能读到下面的隔离环境变量：
+
+```yaml
+setup: uv sync --frozen        # 或 npm ci / pip install -e . / bash scripts/setup.sh
+phases: [...]
+tasks: {...}
+```
+
+setup 非 0 退出或超时（默认 900s）→ 该 task 直接判失败。`--venv` 是这件事的轻量
+特例（只前置一个已建好的 venv 到 PATH，不跑命令）；两者可单用也可叠加。
+
 ## 运行时隔离（并行跑测试不撞）
 
 并行 task 各自跑 acceptance 命令时共享端口/DB/状态会静默冲突。每个 task 的验证命令

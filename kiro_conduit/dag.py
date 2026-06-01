@@ -144,6 +144,7 @@ class Workspace:
     shared_files: tuple[SharedFileSpec, ...]
     workspace_root: Path  # dag.yaml 所在目录，用于解析相对路径
     repos: dict[str, str] = field(default_factory=dict)  # 跨仓库：仓库名 → 路径
+    setup: str | None = None  # 每个 worktree 创建后执行的准备命令（装依赖/生成配置等）
 
     def task(self, task_id: str) -> TaskDef:
         if task_id not in self.tasks:
@@ -192,12 +193,16 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
     tasks = _parse_tasks(raw.get("tasks", {}))
     shared_files = _parse_shared_files(raw.get("shared_files", []))
     repos = _parse_repos(raw.get("repos", {}))
+    setup = raw.get("setup")
+    if setup is not None and (not isinstance(setup, str) or not setup.strip()):
+        raise DagError("setup must be a non-empty string")
     return Workspace(
         phases=phases,
         tasks=tasks,
         shared_files=shared_files,
         workspace_root=workspace_root,
         repos=repos,
+        setup=setup,
     )
 
 

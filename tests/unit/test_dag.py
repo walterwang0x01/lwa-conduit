@@ -739,3 +739,44 @@ class TestPerTaskModel:
         with pytest.raises(DagError, match="model"):
             load_workspace(p)
 
+
+class TestSetupScript:
+    """workspace 级 setup 命令：每个 worktree 创建后执行。"""
+
+    def test_setup_parsed(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            setup: uv sync
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(p)
+        assert ws.setup == "uv sync"
+
+    def test_setup_defaults_none(self, tmp_path: Path) -> None:
+        assert load_workspace(write_dag(tmp_path, minimal_yaml())).setup is None
+
+    def test_blank_setup_rejected(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            setup: "   "
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        with pytest.raises(DagError, match="setup"):
+            load_workspace(p)
+
