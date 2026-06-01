@@ -135,3 +135,8 @@ class TestPlanPrompt:
 
     def test_prompt_requires_linter_in_acceptance(self) -> None:
         assert "linter" in PLAN_PROMPT and "ruff check" in PLAN_PROMPT
+
+    def test_prompt_biases_toward_pr_sized_tasks(self) -> None:
+        # 粒度启发：PR 大小 + 别拆强耦合
+        assert "PR" in PLAN_PROMPT
+        assert "强耦合" in PLAN_PROMPT
