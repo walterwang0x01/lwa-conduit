@@ -93,6 +93,7 @@ class TaskDef:
     max_files: int = 12
     acceptance: tuple[str, ...] = ()
     repo: str | None = None  # 跨仓库：所属仓库名（须在 Workspace.repos）；None=默认仓库
+    model: str | None = None  # 本任务用的模型 id；None=用 role 路由/Kiro 默认
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +381,10 @@ def _parse_task(tid: str, body: dict[str, Any]) -> TaskDef:
     if repo is not None and (not isinstance(repo, str) or not repo):
         raise DagError(f"task {tid!r} repo must be a non-empty string")
 
+    model = body.get("model")
+    if model is not None and (not isinstance(model, str) or not model):
+        raise DagError(f"task {tid!r} model must be a non-empty string")
+
     return TaskDef(
         id=tid,
         spec=spec,
@@ -390,6 +395,7 @@ def _parse_task(tid: str, body: dict[str, Any]) -> TaskDef:
         max_files=max_files,
         acceptance=tuple(acceptance),
         repo=repo,
+        model=model,
     )
 
 

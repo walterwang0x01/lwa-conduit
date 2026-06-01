@@ -701,3 +701,41 @@ class TestCrossRepoSchema:
         assert waves[0] == ["api-schema"]
         assert set(waves[1]) == {"api-handler", "web-client"}
 
+
+class TestPerTaskModel:
+    """per-task 模型路由：dag.yaml 的 task 可声明 model。"""
+
+    def test_model_parsed(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1, t2]
+            tasks:
+              t1: {spec: specs/t1.md, model: claude-haiku-4.5}
+              t2: {spec: specs/t2.md}
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(p)
+        assert ws.tasks["t1"].model == "claude-haiku-4.5"
+        assert ws.tasks["t2"].model is None  # 缺省 = 用 role 路由/Kiro 默认
+
+    def test_empty_model_rejected(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md, model: ""}
+            shared_files: []
+            """,
+        )
+        with pytest.raises(DagError, match="model"):
+            load_workspace(p)
+

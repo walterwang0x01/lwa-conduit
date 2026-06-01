@@ -404,7 +404,7 @@ class ParallelOrchestrator:
                     prompt_timeout=self._prompt_timeout,
                     lock_manager=lock_manager,
                     shared_files=task_def.shared_files_to_modify,
-                    model=self._model_routing.get("implementor"),
+                    model=task_def.model or self._model_routing.get("implementor"),
                 ),
                 verifier=Verifier(
                     contract_baselines=contract_baselines,
