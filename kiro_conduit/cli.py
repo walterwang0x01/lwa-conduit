@@ -234,14 +234,11 @@ async def _run(args: argparse.Namespace) -> int:
     print(summary)
 
     bus = EventBus() if args.dashboard else None
-    reviewer = None
     if args.review:
-        from kiro_conduit.semantic import KiroSemanticReviewer
-
-        reviewer = KiroSemanticReviewer(
-            kiro_cli_path=args.kiro_cli, model=args.review_model
-        )
-        print("  semantic review: ON（Layer 3 对照 spec 审查 diff）")
+        # --review 只做合并后的"集成级初审"（一次性、对照 spec 审整条 diff）。
+        # 不再接 per-task 语义审：它要对每个任务各起一次 Kiro 评审，慢且易超时
+        # （实测 180s fail-open、没真起作用），集成级才是有价值的那一刀。
+        print("  semantic review: ON（合并后对集成结果对照 spec 初审）")
     orch = ParallelOrchestrator(
         workspace=ws,
         base_repo=base_repo,
@@ -250,7 +247,6 @@ async def _run(args: argparse.Namespace) -> int:
         kiro_cli_path=args.kiro_cli,
         resume=args.resume,
         event_bus=bus,
-        semantic_reviewer=reviewer,
         sandbox=args.sandbox,
     )
 

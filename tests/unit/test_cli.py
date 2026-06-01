@@ -307,7 +307,7 @@ class TestSummaryTable:
 
 
 class TestReviewFlag:
-    """--review：把 KiroSemanticReviewer 接进 orchestrator（默认关）。"""
+    """--review：只做合并后的集成级初审，不再把 per-task 语义审接进 orchestrator。"""
 
     def _spy_reviewer(
         self, monkeypatch: pytest.MonkeyPatch, ws: Path, argv: list[str]
@@ -329,13 +329,12 @@ class TestReviewFlag:
         main(["run", "--workspace", str(ws), *argv])
         return captured["reviewer"]
 
-    def test_review_wires_reviewer(
+    def test_review_does_not_wire_per_task_reviewer(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from kiro_conduit.semantic import KiroSemanticReviewer
-
-        reviewer = self._spy_reviewer(monkeypatch, _write_ws(tmp_path), ["--review"])
-        assert isinstance(reviewer, KiroSemanticReviewer)
+        # --review 不再给 orchestrator 接 per-task 语义审（避免 180s 超时）；
+        # 评审只在合并后的集成级做。
+        assert self._spy_reviewer(monkeypatch, _write_ws(tmp_path), ["--review"]) is None
 
     def test_no_review_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
