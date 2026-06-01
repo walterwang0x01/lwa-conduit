@@ -156,3 +156,87 @@ class TestRunWithTimeout:
             await run_with_timeout(
                 _RaisingReviewer(), make_ctx(tmp_path), timeout=5.0
             )
+
+
+class TestReviewIntegration:
+    """review_integration：对整条集成 diff 对照 specs 做一次审。"""
+
+    @pytest.mark.asyncio
+    async def test_reviews_integration_diff_against_specs(self, tmp_path: Path) -> None:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def git(*a: str) -> None:
+            subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+        git("init", "-b", "main")
+        git("config", "user.email", "t@t.com")
+        git("config", "user.name", "t")
+        (repo / "f.py").write_text("x = 1\n")
+        git("add", ".")
+        git("commit", "-m", "init")
+        # 集成分支加一处改动
+        git("checkout", "-b", "kiro-conduit/integration")
+        (repo / "f.py").write_text("x = 1\ny = 2\n")
+        git("add", ".")
+        git("commit", "-m", "feat")
+        git("checkout", "main")
+
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        (specs / "a.md").write_text("加一个 y")
+
+        seen: dict[str, str] = {}
+
+        class _Fake:
+            async def review(self, ctx: ReviewContext) -> ReviewResult:
+                seen["diff"] = ctx.diff
+                seen["spec"] = ctx.task_prompt
+                return ReviewResult(passed=False, feedback="发现：缺少类型注解")
+
+        from kiro_conduit.semantic import review_integration
+
+        result = await review_integration(
+            base_repo=repo, base_branch="main",
+            integration_ref="kiro-conduit/integration",
+            specs_dir=specs, reviewer=_Fake(),
+        )
+        assert result.passed is False
+        assert "缺少类型注解" in result.feedback
+        assert "y = 2" in seen["diff"]   # 真的把集成 diff 喂给了 reviewer
+        assert "加一个 y" in seen["spec"]  # 真的把 specs 喂进去了
+
+    @pytest.mark.asyncio
+    async def test_empty_diff_passes_without_calling_reviewer(self, tmp_path: Path) -> None:
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def git(*a: str) -> None:
+            subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True)
+
+        git("init", "-b", "main")
+        git("config", "user.email", "t@t.com")
+        git("config", "user.name", "t")
+        (repo / "f.py").write_text("x = 1\n")
+        git("add", ".")
+        git("commit", "-m", "init")
+
+        called = {"n": 0}
+
+        class _Fake:
+            async def review(self, ctx: ReviewContext) -> ReviewResult:
+                called["n"] += 1
+                return ReviewResult(passed=False, feedback="should not run")
+
+        from kiro_conduit.semantic import review_integration
+
+        result = await review_integration(
+            base_repo=repo, base_branch="main", integration_ref="main",
+            specs_dir=tmp_path / "nope", reviewer=_Fake(),
+        )
+        assert result.passed is True  # 空 diff → 直接 PASS
+        assert called["n"] == 0  # 没必要调 reviewer

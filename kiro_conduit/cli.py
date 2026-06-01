@@ -87,6 +87,35 @@ def _print_parallel_report(ws: Workspace, report: ParallelRunReport) -> None:
         print(f"  {mark} {tid:<{tw}}  {model:<{mw}}  {status:<7}  "
               f"{out.attempts:<3}  {files}")
 
+async def _review_integration(
+    args: argparse.Namespace, base_repo: Path, base_branch: str, specs_dir: Path
+) -> None:
+    """merge 后对组装好的集成结果做一次 AI 初审，写 .kiro-conduit/review.md。"""
+    from kiro_conduit.git_utils import run_git
+    from kiro_conduit.semantic import KiroSemanticReviewer, review_integration
+
+    code, _o, _e = await run_git(
+        base_repo,
+        ["rev-parse", "--verify", "--quiet", "refs/heads/kiro-conduit/integration"],
+    )
+    ref = "kiro-conduit/integration" if code == 0 else base_branch
+    reviewer = KiroSemanticReviewer(
+        kiro_cli_path=args.kiro_cli, model=args.review_model, max_diff_chars=120000
+    )
+    result = await review_integration(
+        base_repo=base_repo, base_branch=base_branch, integration_ref=ref,
+        specs_dir=specs_dir, reviewer=reviewer,
+    )
+    report_path = base_repo / ".kiro-conduit" / "review.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    verdict = "PASS" if result.passed else "CONCERNS"
+    report_path.write_text(
+        f"# 集成 AI 初审\n\nverdict: {verdict}\n\n{result.feedback}\n", encoding="utf-8"
+    )
+    flag = "✅ 无明显问题" if result.passed else "⚠ 有发现，请看报告"
+    print(f"\n🔎 集成 AI 初审: {flag} — 详见 {report_path}")
+
+
 
 def _print_merge_report(report: MergeReport) -> None:
     print("\n✓ merge phase:")
@@ -202,6 +231,8 @@ async def _run(args: argparse.Namespace) -> int:
         base_branch=base_branch,
     )
     _print_merge_report(merge_report)
+    if args.review:
+        await _review_integration(args, base_repo, base_branch, dag_path.parent / "specs")
     if not report.all_passed:
         print(
             "\n⚠ 部分任务失败/跳过：已把通过的合进 integration，失败项见上方报告。"

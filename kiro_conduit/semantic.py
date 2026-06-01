@@ -255,3 +255,41 @@ async def run_with_timeout(
             passed=True,
             feedback=f"(reviewer timed out after {timeout}s; failed open)",
         )
+
+
+async def review_integration(
+    *,
+    base_repo: Path,
+    base_branch: str,
+    integration_ref: str,
+    specs_dir: Path,
+    reviewer: SemanticReviewer,
+    timeout: float = 600.0,
+) -> ReviewResult:
+    """对整条集成 diff（base_branch...integration_ref）对照 specs 做一次 AI 初审。
+
+    复用 per-task 的 SemanticReviewer：task_prompt 塞拼接后的 specs（= 拆开的 spec），
+    diff 塞整条集成 diff。返回结构化结论，供人只在一份报告上做终审。
+    """
+    from kiro_conduit.git_utils import run_git
+
+    code, diff, err = await run_git(
+        base_repo, ["diff", f"{base_branch}...{integration_ref}"]
+    )
+    if code != 0:
+        return ReviewResult(passed=True, feedback=f"(could not diff integration: {err.strip()})")
+    if not diff.strip():
+        return ReviewResult(passed=True, feedback="(integration diff is empty)")
+
+    spec_text = ""
+    if specs_dir.is_dir():
+        spec_text = "\n\n".join(
+            p.read_text(encoding="utf-8") for p in sorted(specs_dir.glob("*.md"))
+        )
+    ctx = ReviewContext(
+        task_id="integration",
+        task_prompt=spec_text or "(no specs found)",
+        diff=diff,
+        cwd=base_repo,
+    )
+    return await run_with_timeout(reviewer, ctx, timeout=timeout)
