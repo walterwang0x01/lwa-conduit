@@ -50,7 +50,12 @@ class Implementor:
 
     async def run(self, task: Task) -> TaskResult:
         """执行任务，返回结果。瞬时 ACP 错误会退避重试。"""
-        logger.info("[implementor] start task=%s cwd=%s", task.id, task.cwd)
+        logger.info(
+            "[implementor] start task=%s model=%s cwd=%s",
+            task.id,
+            self._model or "<default>",
+            task.cwd,
+        )
         transcript_parts: list[str] = []
 
         for attempt in range(1, self._max_retries + 2):

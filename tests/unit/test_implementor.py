@@ -103,3 +103,22 @@ async def test_no_retry_on_success(
     assert result.success
     assert calls["n"] == 1
     assert _no_sleep == []
+
+
+@pytest.mark.asyncio
+async def test_start_log_includes_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """启动日志记录该任务用的模型，便于事后审计。"""
+    async def ok(self, task: Task) -> list[str]:  # type: ignore[no-untyped-def]
+        return ["ok"]
+
+    monkeypatch.setattr(Implementor, "_run_acp", ok)
+    with caplog.at_level("INFO", logger="kiro_conduit.roles.implementor"):
+        await Implementor(model="claude-haiku-4.5").run(_task(tmp_path))
+    assert "model=claude-haiku-4.5" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="kiro_conduit.roles.implementor"):
+        await Implementor().run(_task(tmp_path))  # 没指定 → <default>
+    assert "model=<default>" in caplog.text
