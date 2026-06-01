@@ -45,8 +45,8 @@ from kiro_conduit.acp.messages import (
 
 logger = logging.getLogger(__name__)
 
-# ACP 消息按行(\n)分隔的 JSON-RPC，单条消息可能含大文件内容/大 diff，
-# 远超 asyncio StreamReader 默认 64KB 行上限（超了 readline 会抛 LimitOverrunError）。
+# StreamReader 内部缓冲上限（backpressure 高水位）。reader 用分块读+手动切行，
+# 不再受行长上限限制；这里给大 headroom 减少大消息时的 transport 暂停。
 _STREAM_LIMIT = 64 * 1024 * 1024  # 64 MiB
 
 
@@ -286,27 +286,39 @@ class AcpClient:
         await self._proc.stdin.drain()
 
     async def _read_stdout(self) -> None:
-        """后台读 stdout，分流到 pending future / session 队列。"""
+        """后台读 stdout，分流到 pending future / session 队列。
+
+        手动分块读 + 按 \\n 切分（不用 readline），这样单条超大消息只会占内存、
+        不会触发 StreamReader 的行长上限把整个 reader 读崩。
+        """
         assert self._proc.stdout is not None
+        buf = bytearray()
         try:
             while True:
-                line = await self._proc.stdout.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace").strip()
-                if not text:
-                    continue
-                logger.debug("recv: %s", text)
-                try:
-                    msg = json.loads(text)
-                except json.JSONDecodeError:
-                    logger.warning("non-JSON line from ACP: %r", text)
-                    continue
-                self._dispatch(msg)
+                chunk = await self._proc.stdout.read(65536)
+                if not chunk:
+                    break  # EOF
+                buf.extend(chunk)
+                while (nl := buf.find(b"\n")) != -1:
+                    line = bytes(buf[:nl])
+                    del buf[: nl + 1]
+                    self._handle_line(line)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("ACP reader crashed")
+
+    def _handle_line(self, raw: bytes) -> None:
+        text = raw.decode("utf-8", errors="replace").strip()
+        if not text:
+            return
+        logger.debug("recv: %s", text)
+        try:
+            msg = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("non-JSON line from ACP: %r", text)
+            return
+        self._dispatch(msg)
 
     async def _drain_stderr(self) -> None:
         """把 stderr 内容转发到 logger（避免 pipe 堵死）。"""
