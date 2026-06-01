@@ -472,6 +472,37 @@ class TestParallelOrchestrator:
         assert orch._isolation_env("a") == envs["a"]
 
     @pytest.mark.asyncio
+    async def test_copy_declared_files_into_worktree(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """copy_files 声明的本地文件（gitignored）应被拷进 worktree。"""
+        from kiro_conduit.worktree import WorktreeManager
+
+        # base repo 里放一个 gitignored 的 .env（不提交，不进 worktree 的 tracked 文件）
+        (real_repo / ".env").write_text("SECRET=1\n")
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            copy_files: [.env]
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        orch = ParallelOrchestrator(load_workspace(dag), real_repo)
+        async with WorktreeManager(real_repo) as wm:
+            wt = await wm.create("t1")
+            assert not (wt.path / ".env").exists()  # worktree 默认没有 gitignored 文件
+            orch._copy_declared_files(wt)
+            assert (wt.path / ".env").read_text() == "SECRET=1\n"
+
+    @pytest.mark.asyncio
     async def test_run_setup_executes_in_worktree(
         self, real_repo: Path, tmp_path: Path
     ) -> None:

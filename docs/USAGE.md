@@ -124,6 +124,18 @@ tasks: {...}
 setup 非 0 退出或超时（默认 900s）→ 该 task 直接判失败。`--venv` 是这件事的轻量
 特例（只前置一个已建好的 venv 到 PATH，不跑命令）；两者可单用也可叠加。
 
+### 拷贝本地文件进 worktree（`copy_files`）
+
+worktree 只含 git 跟踪的文件，**gitignored 的本地文件（如 `.env`）不会进去**，
+但测试/应用常需要它们。用 `copy_files` 声明要拷进每个 worktree 的本地文件
+（相对 base repo 解析，源缺失则跳过）：
+
+```yaml
+copy_files: ['.env', 'config/local.yaml']
+```
+
+在依赖合入之后、`setup` 之前执行，所以 `setup` 能用到拷进来的文件。
+
 ## 运行时隔离（并行跑测试不撞）
 
 并行 task 各自跑 acceptance 命令时共享端口/DB/状态会静默冲突。每个 task 的验证命令

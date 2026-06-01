@@ -390,6 +390,8 @@ class ParallelOrchestrator:
             wt = await wm.create(task_def.id, base_branch=effective_base)
             # 让 task 站在其依赖的真实产出之上：把每个依赖分支 merge 进本 worktree
             await self._merge_dependencies(wt, task_def, owner_handles)
+            # 把声明的本地文件（常 gitignored，如 .env）拷进 worktree
+            self._copy_declared_files(wt)
             # worktree 备好后跑 setup（装依赖/生成配置等），失败则该 task 失败
             await self._run_setup(wt, task_def)
             self._publish(
@@ -450,6 +452,23 @@ class ParallelOrchestrator:
                 if task_id in lock.consumers and lock.owner in owner_handles:
                     return owner_handles[lock.owner].branch
         return default_base
+
+    def _copy_declared_files(self, wt: WorktreeHandle) -> None:
+        """把 workspace.copy_files 声明的本地文件从 base repo 拷进 worktree。
+
+        典型是 gitignored 的 .env —— worktree 只含被 git 跟踪的文件，
+        测试/应用常需要这些本地文件。源缺失则跳过（文件可选）。
+        """
+        import shutil
+
+        for rel in self._workspace.copy_files:
+            src = self._base_repo / rel
+            if not src.is_file():
+                logger.debug("[copy_files] skip missing %s", src)
+                continue
+            dst = wt.path / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
 
     async def _run_setup(self, wt: WorktreeHandle, task_def: TaskDef) -> None:
         """workspace 声明了 setup 命令时，在 worktree 备好后执行（装依赖/生成配置等）。

@@ -780,3 +780,43 @@ class TestSetupScript:
         with pytest.raises(DagError, match="setup"):
             load_workspace(p)
 
+
+class TestCopyFiles:
+    """workspace 级 copy_files：把本地（gitignored）文件拷进每个 worktree。"""
+
+    def test_copy_files_parsed(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            copy_files: [".env", "config/local.yaml"]
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        assert load_workspace(p).copy_files == (".env", "config/local.yaml")
+
+    def test_copy_files_defaults_empty(self, tmp_path: Path) -> None:
+        assert load_workspace(write_dag(tmp_path, minimal_yaml())).copy_files == ()
+
+    def test_copy_files_must_be_string_list(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            copy_files: [1, 2]
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        with pytest.raises(DagError, match="copy_files"):
+            load_workspace(p)
+

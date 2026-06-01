@@ -145,6 +145,7 @@ class Workspace:
     workspace_root: Path  # dag.yaml 所在目录，用于解析相对路径
     repos: dict[str, str] = field(default_factory=dict)  # 跨仓库：仓库名 → 路径
     setup: str | None = None  # 每个 worktree 创建后执行的准备命令（装依赖/生成配置等）
+    copy_files: tuple[str, ...] = ()  # 拷进每个 worktree 的本地（常 gitignored）文件，如 .env
 
     def task(self, task_id: str) -> TaskDef:
         if task_id not in self.tasks:
@@ -196,6 +197,11 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
     setup = raw.get("setup")
     if setup is not None and (not isinstance(setup, str) or not setup.strip()):
         raise DagError("setup must be a non-empty string")
+    copy_files_raw = raw.get("copy_files", [])
+    if not isinstance(copy_files_raw, list) or not all(
+        isinstance(f, str) and f for f in copy_files_raw
+    ):
+        raise DagError("copy_files must be a list of non-empty strings")
     return Workspace(
         phases=phases,
         tasks=tasks,
@@ -203,6 +209,7 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
         workspace_root=workspace_root,
         repos=repos,
         setup=setup,
+        copy_files=tuple(copy_files_raw),
     )
 
 
