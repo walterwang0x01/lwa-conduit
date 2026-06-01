@@ -472,6 +472,47 @@ class TestParallelOrchestrator:
         assert orch._isolation_env("a") == envs["a"]
 
     @pytest.mark.asyncio
+    async def test_merge_dependencies_brings_in_dep_code(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """依赖的产出应被 merge 进 task 的 worktree（task 站在依赖之上工作）。"""
+        from kiro_conduit.git_utils import run_git
+        from kiro_conduit.worktree import WorktreeManager
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+              - name: B
+                type: serial
+                tasks: [t2]
+            tasks:
+              t1: {spec: specs/t1.md}
+              t2: {spec: specs/t2.md, depends_on: [t1]}
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(dag)
+        orch = ParallelOrchestrator(ws, real_repo)
+        async with WorktreeManager(real_repo) as wm:
+            # t1 产出 depfile.py 并提交到自己分支
+            wt1 = await wm.create("t1")
+            (wt1.path / "depfile.py").write_text("DEP = 1\n")
+            await run_git(wt1.path, ["add", "-A"])
+            await run_git(wt1.path, ["commit", "-m", "t1 output"])
+            # t2 从 base 起，本身没有 depfile
+            wt2 = await wm.create("t2")
+            assert not (wt2.path / "depfile.py").exists()
+            # merge 依赖后，t2 的 worktree 应能看到 t1 的产出
+            await orch._merge_dependencies(wt2, ws.task("t2"), {"t1": wt1})
+            assert (wt2.path / "depfile.py").read_text() == "DEP = 1\n"
+
+    @pytest.mark.asyncio
     async def test_commit_task_survives_gitignored_files(
         self, real_repo: Path, tmp_path: Path
     ) -> None:

@@ -385,6 +385,8 @@ class ParallelOrchestrator:
         )
         async with sem:
             wt = await wm.create(task_def.id, base_branch=effective_base)
+            # 让 task 站在其依赖的真实产出之上：把每个依赖分支 merge 进本 worktree
+            await self._merge_dependencies(wt, task_def, owner_handles)
             self._publish(
                 TaskStarted(
                     task_id=task_def.id,
@@ -443,6 +445,37 @@ class ParallelOrchestrator:
                 if task_id in lock.consumers and lock.owner in owner_handles:
                     return owner_handles[lock.owner].branch
         return default_base
+
+    async def _merge_dependencies(
+        self,
+        wt: WorktreeHandle,
+        task_def: TaskDef,
+        owner_handles: dict[str, WorktreeHandle],
+    ) -> None:
+        """把 task 的每个依赖分支 merge 进它的 worktree，让它基于依赖的产出工作。
+
+        依赖分支本身已累积了各自的（传递）依赖，所以只 merge 直接依赖即可。
+        依赖间若有真实文件冲突 → abort 并抛错，作为该 task 的失败上报。
+        """
+        from kiro_conduit.git_utils import run_git
+
+        for dep in task_def.depends_on:
+            handle = owner_handles.get(dep)
+            if handle is None:
+                continue  # 依赖未完成（理论上该 task 已被上游跳过），跳过
+            # 跨仓库依赖的分支不在本 task 的仓库里，无法 git merge —— 跳过
+            dep_def = self._workspace.tasks.get(dep)
+            if dep_def is not None and dep_def.repo != task_def.repo:
+                continue
+            code, _out, stderr = await run_git(
+                wt.path, ["merge", "--no-edit", handle.branch]
+            )
+            if code != 0:
+                await run_git(wt.path, ["merge", "--abort"])
+                raise RuntimeError(
+                    f"task {task_def.id!r} could not merge dependency "
+                    f"{dep!r} ({handle.branch}): {stderr.strip()}"
+                )
 
     async def _commit_task(self, wt: WorktreeHandle) -> None:
         """task 跑成功后把改动 commit 到它自己的分支（review / merge 都依赖它）。"""
