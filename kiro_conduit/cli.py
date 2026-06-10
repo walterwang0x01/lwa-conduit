@@ -157,12 +157,20 @@ async def _integration_check(
                 shutil.copy2(src, dst)
         from rich.console import Console
 
+        from kiro_conduit.proc_util import reap
+
         with Console().status(f"[bold]集成全量验证中… ($ {cmd})", spinner="dots"):
             proc = await asyncio.create_subprocess_shell(
                 cmd, cwd=str(wt),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
             )
-            out_b, _ = await proc.communicate()
+            try:
+                out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=1800)
+            except TimeoutError:
+                await reap(proc)  # 连根杀（install/build/test 子进程不留孤儿）
+                print("\n🧪 集成全量验证: ✗ 超时（30min）")
+                return False
         ok = proc.returncode == 0
         print(f"\n🧪 集成全量验证: {'✅ PASS' if ok else '✗ FAIL'}  ($ {cmd})")
         logger.info("[integration-check] %s ($ %s)", "PASS" if ok else "FAIL", cmd)

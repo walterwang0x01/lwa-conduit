@@ -305,14 +305,16 @@ class Verifier:
             env=proc_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
         try:
             stdout_b, _ = await asyncio.wait_for(
                 proc.communicate(), timeout=self._command_timeout
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            from kiro_conduit.proc_util import reap
+
+            await reap(proc)  # 连根杀（pytest/npm 等子进程不留孤儿）
             return 124, f"(timeout after {self._command_timeout}s)"
         return (
             proc.returncode if proc.returncode is not None else -1,

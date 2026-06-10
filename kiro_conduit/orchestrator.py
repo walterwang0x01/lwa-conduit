@@ -547,14 +547,16 @@ class ParallelOrchestrator:
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
         )
         try:
             out_b, _ = await asyncio.wait_for(
                 proc.communicate(), timeout=self._setup_timeout
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            from kiro_conduit.proc_util import reap
+
+            await reap(proc)  # 连根杀掉 sh + 子进程（如 npm），避免孤儿挂死
             raise RuntimeError(
                 f"task {task_def.id!r} setup timed out after {self._setup_timeout}s"
             ) from None

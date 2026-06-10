@@ -542,6 +542,41 @@ class TestParallelOrchestrator:
             assert (wt.path / ".env").read_text() == "SECRET=1\n"
 
     @pytest.mark.asyncio
+    async def test_run_setup_timeout_kills_tree_promptly(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        """hang 的 setup（shell 派生子进程）超时应被连根杀、迅速返回，不挂死。"""
+        import time
+
+        from kiro_conduit.worktree import WorktreeManager
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        # setup 起一个会睡很久的子进程（模拟卡住的 npm install）
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            setup: sh -c 'sleep 60' &  sleep 60
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        orch = ParallelOrchestrator(load_workspace(dag), real_repo, setup_timeout=0.5)
+        async with WorktreeManager(real_repo) as wm:
+            wt = await wm.create("t1")
+            t0 = time.monotonic()
+            with pytest.raises(RuntimeError, match="setup timed out"):
+                await orch._run_setup(wt, orch._workspace.task("t1"))
+            elapsed = time.monotonic() - t0
+            # 0.5s 超时 + 有界 reap，应远早于 sleep 60 返回（给足余量 15s）
+            assert elapsed < 15, f"setup 超时后没能迅速收尾：{elapsed:.1f}s"
+
+    @pytest.mark.asyncio
     async def test_run_setup_executes_in_worktree(
         self, real_repo: Path, tmp_path: Path
     ) -> None:
