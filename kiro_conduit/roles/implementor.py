@@ -19,6 +19,7 @@ import logging
 from kiro_conduit.acp import (
     AcpClient,
     AcpClientConfig,
+    AcpError,
     AgentMessageChunk,
     AgentThoughtChunk,
     ToolCallEvent,
@@ -64,8 +65,13 @@ class Implementor:
             try:
                 transcript_parts = await self._run_acp(task)
                 break
-            except (TimeoutError, ConnectionError) as exc:
-                if attempt <= self._max_retries:
+            except (TimeoutError, ConnectionError, AcpError) as exc:
+                # AcpError：内部错误(-32603)与服务端错误区间(-32000~-32099)视为瞬时、退避重试；
+                # 其它确定性协议错(如 -32601)不重试，但落到下面优雅判失败，而不是崩(attempts=0)。
+                retryable = not isinstance(exc, AcpError) or (
+                    exc.code == -32603 or -32099 <= exc.code <= -32000
+                )
+                if retryable and attempt <= self._max_retries:
                     delay = self._retry_base_delay * (2 ** (attempt - 1))
                     logger.warning(
                         "[implementor] task=%s ACP attempt %d/%d failed: %s; "
@@ -79,7 +85,7 @@ class Implementor:
                     await asyncio.sleep(delay)
                     continue
                 logger.error(
-                    "[implementor] task=%s exhausted ACP retries: %s", task.id, exc
+                    "[implementor] task=%s ACP failed (no more retries): %s", task.id, exc
                 )
                 return TaskResult(
                     task_id=task.id,

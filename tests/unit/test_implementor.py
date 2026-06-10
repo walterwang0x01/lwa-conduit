@@ -106,6 +106,47 @@ async def test_no_retry_on_success(
 
 
 @pytest.mark.asyncio
+async def test_retries_on_acp_internal_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """ACP -32603 内部错误视为瞬时：退避重试，第三次成功。"""
+    from kiro_conduit.acp import AcpError
+
+    calls = {"n": 0}
+
+    async def flaky(self, task: Task) -> list[str]:  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise AcpError(code=-32603, message="Internal error")
+        return ["ok"]
+
+    monkeypatch.setattr(Implementor, "_run_acp", flaky)
+    result = await Implementor(max_retries=2).run(_task(tmp_path))
+    assert result.success
+    assert calls["n"] == 3  # 重试了两次
+
+
+@pytest.mark.asyncio
+async def test_acp_deterministic_error_fails_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+) -> None:
+    """ACP -32601(方法不存在)是确定性错误：不重试，但优雅判失败而非崩。"""
+    from kiro_conduit.acp import AcpError
+
+    calls = {"n": 0}
+
+    async def always(self, task: Task) -> list[str]:  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        raise AcpError(code=-32601, message="Method not found")
+
+    monkeypatch.setattr(Implementor, "_run_acp", always)
+    result = await Implementor(max_retries=2).run(_task(tmp_path))
+    assert not result.success  # 优雅失败
+    assert "AcpError" in (result.error or "")
+    assert calls["n"] == 1  # 没重试（确定性错误）
+
+
+@pytest.mark.asyncio
 async def test_start_log_includes_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
