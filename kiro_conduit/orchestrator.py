@@ -694,6 +694,12 @@ class ParallelOrchestrator:
         if not spec_path.is_file():
             raise FileNotFoundError(f"spec file not found: {spec_path}")
         prompt = spec_path.read_text(encoding="utf-8")
+        conventions = self._workspace.conventions
+        if conventions:
+            prompt = (
+                "## 全局约定（所有任务通用，务必遵守）\n\n"
+                f"{conventions.strip()}\n\n---\n\n{prompt}"
+            )
         return Task(
             id=task_def.id,
             prompt=prompt,

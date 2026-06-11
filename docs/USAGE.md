@@ -113,6 +113,25 @@ kiro-conduit run --workspace my-workspace/ --merge
 | `--max-attempts N` | 单 task 失败重试上限（默认 3） |
 | `--kiro-cli <path>` | kiro-cli 可执行文件路径（默认 `kiro-cli`） |
 
+## 全局约定注入（`conventions`）
+
+跨任务的共识（如"全后端统一异步 `AsyncSession`""错误返回统一用 `AppError`""测试一律
+用 pytest"）写在 `dag.yaml` 顶层 `conventions`，会被**注入每一个任务的 prompt 头部**。
+各任务由独立 Kiro 实例执行、彼此看不见对方的选择——没有全局约定时，它们会各自做出
+局部合理但全局不一致的决定（A 用异步、B 用同步），只在合并时才暴露。`conventions`
+从源头消除这类分裂，等价于团队的「架构约定 / 风格指南」。
+
+```yaml
+conventions: |
+  - 所有数据库访问统一用异步 SQLAlchemy（AsyncSession），service 一律 async def；
+  - 错误统一抛 AppError；响应统一用 app/core/response 的 ok/fail。
+phases: [...]
+tasks: {...}
+```
+
+> 配合「共享基建文件归 foundation 任务独家所有」（见下）效果最好：约定定行为，
+> 单一 owner 定文件，两者一起把跨任务一致性钉死。
+
 ## 每个 worktree 的准备（`setup`）
 
 每个 task 在自己的 git worktree 里跑。若项目需要 per-worktree 准备（装依赖、生成

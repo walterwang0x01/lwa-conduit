@@ -876,3 +876,43 @@ class TestIntegrationCheck:
         with pytest.raises(DagError, match="integration_check"):
             load_workspace(p)
 
+
+
+class TestConventions:
+    """workspace 级 conventions：注入每个任务 prompt 的全局约定。"""
+
+    def test_parsed(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            conventions: 全后端统一异步
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        assert load_workspace(p).conventions == "全后端统一异步"
+
+    def test_defaults_none(self, tmp_path: Path) -> None:
+        assert load_workspace(write_dag(tmp_path, minimal_yaml())).conventions is None
+
+    def test_blank_rejected(self, tmp_path: Path) -> None:
+        p = write_dag(
+            tmp_path,
+            """
+            conventions: "  "
+            phases:
+              - name: only
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1: {spec: specs/t1.md}
+            shared_files: []
+            """,
+        )
+        with pytest.raises(DagError, match="conventions"):
+            load_workspace(p)

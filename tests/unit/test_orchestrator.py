@@ -791,3 +791,55 @@ class TestParallelOrchestrator:
             ParallelOrchestrator(ws, Path("relative"))
         with pytest.raises(ValueError, match="max_concurrency"):
             ParallelOrchestrator(ws, real_repo, max_concurrency=0)
+
+
+class TestConventionsInjection:
+    """workspace.conventions 应被注入每个任务的 prompt 头部。"""
+
+    def test_materialize_prepends_conventions(self, real_repo: Path, tmp_path: Path) -> None:
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            conventions: 全后端统一异步（AsyncSession）
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1:
+                spec: specs/t1.md
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(dag)
+        orch = ParallelOrchestrator(ws, real_repo)
+        task = orch._materialize_task(ws.task("t1"), tmp_path)
+        assert task.prompt.startswith("## 全局约定")
+        assert "全后端统一异步（AsyncSession）" in task.prompt
+        assert "stub spec for testing" in task.prompt  # 原 spec 内容保留
+
+    def test_no_conventions_leaves_prompt_unchanged(
+        self, real_repo: Path, tmp_path: Path
+    ) -> None:
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        dag = write_workspace_with_specs(
+            ws_dir,
+            """
+            phases:
+              - name: A
+                type: serial
+                tasks: [t1]
+            tasks:
+              t1:
+                spec: specs/t1.md
+            shared_files: []
+            """,
+        )
+        ws = load_workspace(dag)
+        orch = ParallelOrchestrator(ws, real_repo)
+        task = orch._materialize_task(ws.task("t1"), tmp_path)
+        assert "全局约定" not in task.prompt
+        assert task.prompt.startswith("# stub spec")

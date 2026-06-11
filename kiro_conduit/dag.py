@@ -148,6 +148,7 @@ class Workspace:
     copy_files: tuple[str, ...] = ()  # 拷进每个 worktree 的本地（常 gitignored）文件，如 .env
     format: str | None = None  # 验证前在 worktree 跑的自动修复/格式化命令（如 ruff --fix）
     integration_check: str | None = None  # 合并后对集成结果跑的全量验证命令
+    conventions: str | None = None  # 注入每个任务 prompt 的全局约定（如"全后端异步"）
 
     def task(self, task_id: str) -> TaskDef:
         if task_id not in self.tasks:
@@ -212,6 +213,11 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
     fmt = raw.get("format")
     if fmt is not None and (not isinstance(fmt, str) or not fmt.strip()):
         raise DagError("format must be a non-empty string")
+    conventions = raw.get("conventions")
+    if conventions is not None and (
+        not isinstance(conventions, str) or not conventions.strip()
+    ):
+        raise DagError("conventions must be a non-empty string")
     return Workspace(
         phases=phases,
         tasks=tasks,
@@ -222,6 +228,7 @@ def _parse_workspace(raw: dict[str, Any], workspace_root: Path) -> Workspace:
         copy_files=tuple(copy_files_raw),
         format=fmt,
         integration_check=integration_check,
+        conventions=conventions,
     )
 
 
