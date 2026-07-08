@@ -27,6 +27,7 @@ from kiro_conduit.acp import (
 )
 from kiro_conduit.git_utils import collect_diff, list_changed_files
 from kiro_conduit.runtime.cursor_cli import cursor_prompt_stream
+from kiro_conduit.runtime.model_router import resolve_runtime_for_prompt
 from kiro_conduit.runtime.types import RuntimeConfig
 from kiro_conduit.types import Task, TaskResult
 
@@ -142,15 +143,16 @@ class Implementor:
 
     async def _run_acp(self, task: Task) -> list[str]:
         """跑一次完整 agent 交互，返回 transcript 片段。"""
-        if self._runtime.kind == "cursor-cli":
+        if self._runtime.kind == "cursor-agent-cli":
             return await self._run_cursor(task)
         return await self._run_kiro_acp(task)
 
     async def _run_cursor(self, task: Task) -> list[str]:
         transcript_parts: list[str] = []
         full_prompt = self._render_prompt(task)
+        runtime = resolve_runtime_for_prompt(self._runtime, full_prompt)
         async for chunk in cursor_prompt_stream(
-            self._runtime,
+            runtime,
             cwd=task.cwd,
             prompt=full_prompt,
         ):
@@ -159,20 +161,20 @@ class Implementor:
 
     async def _run_kiro_acp(self, task: Task) -> list[str]:
         """Kiro ACP 路径（原实现）。"""
+        full_prompt = self._render_prompt(task)
+        runtime = resolve_runtime_for_prompt(self._runtime, full_prompt)
         config = AcpClientConfig(
-            kiro_cli_path=self._runtime.bin,
+            kiro_cli_path=runtime.bin,
             cwd=task.cwd,
             response_timeout=self._prompt_timeout,
             idle_timeout=self._idle_timeout,
-            model=self._model or self._runtime.model,
+            model=self._model or runtime.model,
             sandbox_writable=(task.cwd,) if self._sandbox else None,
         )
         transcript_parts: list[str] = []
         async with await AcpClient.spawn(config) as client:
             await client.initialize()
             session_id = await client.new_session(cwd=task.cwd)
-
-            full_prompt = self._render_prompt(task)
             logger.debug("[implementor] prompt:\n%s", full_prompt)
 
             events = await client.prompt(session_id, full_prompt)

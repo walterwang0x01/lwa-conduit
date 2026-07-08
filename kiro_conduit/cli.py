@@ -87,7 +87,7 @@ def _runtime_from_args(
         bin_override = args.kiro_cli
     return RuntimeConfig.from_cli(
         kiro_cli=bin_override,
-        runtime_kind="cursor-cli" if kind == "cursor-cli" else "kiro-acp",
+        runtime_kind="cursor-agent-cli" if kind == "cursor-agent-cli" else "kiro-cli-acp",
         model=model,
         timeout=timeout,
     )
@@ -157,7 +157,7 @@ async def _review_integration(
         runtime=_runtime_from_args(
             args,
             role="reviewer",
-            default_kind="kiro-acp",
+            default_kind="kiro-cli-acp",
             model=args.review_model,
         ),
         max_diff_chars=120000,
@@ -312,13 +312,13 @@ async def _run(args: argparse.Namespace) -> int:
     impl_runtime = _runtime_from_args(
         args,
         role="implementor",
-        default_kind=getattr(args, "runtime_kind", "kiro-acp"),
+        default_kind=getattr(args, "runtime_kind", "kiro-cli-acp"),
         model=None,
     )
     review_runtime = _runtime_from_args(
         args,
         role="reviewer",
-        default_kind="kiro-acp",
+        default_kind="kiro-cli-acp",
         model=args.review_model,
     )
     print(f"  implementor runtime: {impl_runtime.kind} ({impl_runtime.bin})")
@@ -339,7 +339,7 @@ async def _run(args: argparse.Namespace) -> int:
             runtime=_runtime_from_args(
                 args,
                 role="reviewer",
-                default_kind="kiro-acp",
+                default_kind="kiro-cli-acp",
                 model=args.review_model,
             ),
             model=args.review_model,
@@ -353,12 +353,12 @@ async def _run(args: argparse.Namespace) -> int:
         implementor_runtime=_runtime_from_args(
             args,
             role="implementor",
-            default_kind=getattr(args, "runtime_kind", "kiro-acp"),
+            default_kind=getattr(args, "runtime_kind", "kiro-cli-acp"),
             model=None,
             timeout=600.0,
         ),
         kiro_cli_path=args.kiro_cli,
-        runtime_kind=getattr(args, "runtime_kind", "kiro-acp"),
+        runtime_kind=getattr(args, "runtime_kind", "kiro-cli-acp"),
         resume=args.resume,
         event_bus=bus,
         semantic_reviewer=task_reviewer,
@@ -486,7 +486,7 @@ async def _plan(args: argparse.Namespace) -> int:
         runtime=_runtime_from_args(
             args,
             role="planner",
-            default_kind=getattr(args, "planner_runtime_kind", "kiro-acp"),
+            default_kind=getattr(args, "planner_runtime_kind", "kiro-cli-acp"),
             model=args.model,
             timeout=args.timeout,
         ),
@@ -578,13 +578,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument(
         "--runtime-kind",
-        choices=("kiro-acp", "cursor-cli"),
-        default="kiro-acp",
+        choices=("kiro-cli-acp", "cursor-agent-cli"),
+        default="kiro-cli-acp",
         help="default implementor runtime if no role-specific override is set",
     )
     run_p.add_argument(
         "--implementor-runtime-kind",
-        choices=("kiro-acp", "cursor-cli"),
+        choices=("kiro-cli-acp", "cursor-agent-cli"),
         default=None,
         help="runtime for task execution workers (defaults to --runtime-kind)",
     )
@@ -595,9 +595,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument(
         "--reviewer-runtime-kind",
-        choices=("kiro-acp", "cursor-cli"),
-        default="kiro-acp",
-        help="runtime for semantic reviewer (default: kiro-acp)",
+        choices=("kiro-cli-acp", "cursor-agent-cli"),
+        default="kiro-cli-acp",
+        help="runtime for semantic reviewer (default: kiro-cli-acp)",
     )
     run_p.add_argument(
         "--reviewer-bin",
@@ -606,8 +606,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument(
         "--planner-runtime-kind",
-        choices=("kiro-acp", "cursor-cli"),
-        default="kiro-acp",
+        choices=("kiro-cli-acp", "cursor-agent-cli"),
+        default="kiro-cli-acp",
         help="reserved for future plan reuse; current run path does not invoke planner",
     )
     run_p.add_argument("--resume", action="store_true", help="resume from prior run-state")
@@ -640,9 +640,9 @@ def main(argv: list[str] | None = None) -> int:
     plan_p.add_argument("--kiro-cli", default="kiro-cli", help="default planner binary")
     plan_p.add_argument(
         "--planner-runtime-kind",
-        choices=("kiro-acp", "cursor-cli"),
-        default="kiro-acp",
-        help="runtime for planning (default: kiro-acp)",
+        choices=("kiro-cli-acp", "cursor-agent-cli"),
+        default="kiro-cli-acp",
+        help="runtime for planning (default: kiro-cli-acp)",
     )
     plan_p.add_argument(
         "--planner-bin",

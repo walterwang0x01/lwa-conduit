@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from kiro_conduit.runtime.types import RuntimeKind
 
-_RUNTIME_PREFIXES = frozenset({"kiro-acp", "cursor-cli"})
+_RUNTIME_PREFIXES = frozenset({"kiro-cli-acp", "cursor-agent-cli"})
 
 
 def encode_session_id(kind: RuntimeKind, native_id: str) -> str:
@@ -27,6 +27,6 @@ def decode_session_id(stored: str | None, expected_kind: RuntimeKind) -> str | N
             if prefix != expected_kind:
                 return None
             return native
-    if expected_kind == "kiro-acp":
+    if expected_kind == "kiro-cli-acp":
         return stored
     return None

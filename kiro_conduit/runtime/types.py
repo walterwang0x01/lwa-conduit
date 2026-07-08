@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-RuntimeKind = Literal["kiro-acp", "cursor-cli"]
+RuntimeKind = Literal["kiro-cli-acp", "cursor-agent-cli"]
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     """Agent CLI 运行时配置（替代裸 kiro_cli_path）。"""
 
-    kind: RuntimeKind = "kiro-acp"
+    kind: RuntimeKind = "kiro-cli-acp"
     bin: str = "kiro-cli"
     model: str | None = None
     agent: str | None = None
@@ -25,22 +25,22 @@ class RuntimeConfig:
         cls,
         *,
         kiro_cli: str = "kiro-cli",
-        runtime_kind: RuntimeKind = "kiro-acp",
+        runtime_kind: RuntimeKind = "kiro-cli-acp",
         model: str | None = None,
         timeout: float = 600.0,
         force: bool = True,
     ) -> RuntimeConfig:
-        if runtime_kind == "cursor-cli":
+        if runtime_kind == "cursor-agent-cli":
             agent_bin = kiro_cli if kiro_cli != "kiro-cli" else "agent"
             return cls(
-                kind="cursor-cli",
+                kind="cursor-agent-cli",
                 bin=agent_bin,
                 model=model,
                 force=force,
                 prompt_timeout=timeout,
             )
         return cls(
-            kind="kiro-acp",
+            kind="kiro-cli-acp",
             bin=kiro_cli,
             model=model,
             prompt_timeout=timeout,

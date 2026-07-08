@@ -99,7 +99,7 @@ class ParallelOrchestrator:
         max_attempts: int = 3,
         implementor_runtime: RuntimeConfig | None = None,
         kiro_cli_path: str = "kiro-cli",
-        runtime_kind: str = "kiro-acp",
+        runtime_kind: str = "kiro-cli-acp",
         prompt_timeout: float = 600.0,
         semantic_reviewer: SemanticReviewer | None = None,
         review_timeout: float = 180.0,
@@ -121,7 +121,9 @@ class ParallelOrchestrator:
         self._kiro_cli_path = kiro_cli_path
         self._runtime = implementor_runtime or RuntimeConfig.from_cli(
             kiro_cli=kiro_cli_path,
-            runtime_kind="cursor-cli" if runtime_kind == "cursor-cli" else "kiro-acp",
+            runtime_kind=(
+                "cursor-agent-cli" if runtime_kind == "cursor-agent-cli" else "kiro-cli-acp"
+            ),
             timeout=prompt_timeout,
         )
         self._prompt_timeout = prompt_timeout

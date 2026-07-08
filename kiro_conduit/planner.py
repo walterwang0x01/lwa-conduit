@@ -31,6 +31,7 @@ import yaml
 
 from kiro_conduit.dag import DagError, load_workspace
 from kiro_conduit.memory import Memory
+from kiro_conduit.runtime.model_router import resolve_runtime_for_prompt
 from kiro_conduit.runtime.types import RuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -406,7 +407,7 @@ class KiroPlanner:
     ) -> None:
         self._runtime = runtime or RuntimeConfig.from_cli(
             kiro_cli=kiro_cli_path,
-            runtime_kind="kiro-acp",
+            runtime_kind="kiro-cli-acp",
             model=model,
             timeout=prompt_timeout,
         )
@@ -526,18 +527,19 @@ class KiroPlanner:
         return tasks, raw_plan
 
     async def _ask(self, prompt: str, cwd: Path) -> str:
-        if self._runtime.kind == "cursor-cli":
+        runtime = resolve_runtime_for_prompt(self._runtime, prompt)
+        if runtime.kind == "cursor-agent-cli":
             from kiro_conduit.runtime.cursor_cli import cursor_prompt_text
 
-            return await cursor_prompt_text(self._runtime, cwd=cwd, prompt=prompt)
+            return await cursor_prompt_text(runtime, cwd=cwd, prompt=prompt)
 
         from kiro_conduit.acp import AcpClient, AcpClientConfig, AgentMessageChunk, TurnEnd
 
         config = AcpClientConfig(
-            kiro_cli_path=self._runtime.bin,
+            kiro_cli_path=runtime.bin,
             cwd=cwd,
             response_timeout=self._prompt_timeout,
-            model=self._model or self._runtime.model,
+            model=self._model or runtime.model,
         )
         parts: list[str] = []
         async with await AcpClient.spawn(config) as client:
