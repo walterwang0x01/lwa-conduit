@@ -19,6 +19,11 @@ class RuntimeConfig:
     force: bool = True
     prompt_timeout: float = 600.0
     idle_timeout: float = 300.0
+    simple_tier: str = "balanced"
+    medium_tier: str = "strong"
+    hard_tier: str = "max"
+    medium_threshold: int = 4
+    hard_threshold: int = 7
 
     @classmethod
     def from_cli(
@@ -29,6 +34,11 @@ class RuntimeConfig:
         model: str | None = None,
         timeout: float = 600.0,
         force: bool = True,
+        simple_tier: str = "balanced",
+        medium_tier: str = "strong",
+        hard_tier: str = "max",
+        medium_threshold: int = 4,
+        hard_threshold: int = 7,
     ) -> RuntimeConfig:
         if runtime_kind == "cursor-agent-cli":
             agent_bin = kiro_cli if kiro_cli != "kiro-cli" else "agent"
@@ -38,10 +48,20 @@ class RuntimeConfig:
                 model=model,
                 force=force,
                 prompt_timeout=timeout,
+                simple_tier=simple_tier,
+                medium_tier=medium_tier,
+                hard_tier=hard_tier,
+                medium_threshold=medium_threshold,
+                hard_threshold=hard_threshold,
             )
         return cls(
             kind="kiro-cli-acp",
             bin=kiro_cli,
             model=model,
             prompt_timeout=timeout,
+            simple_tier=simple_tier,
+            medium_tier=medium_tier,
+            hard_tier=hard_tier,
+            medium_threshold=medium_threshold,
+            hard_threshold=hard_threshold,
         )

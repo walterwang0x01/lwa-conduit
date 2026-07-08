@@ -8,7 +8,9 @@ import re
 import subprocess
 import time
 from dataclasses import replace
+from shutil import which
 
+from kiro_conduit.runtime.registry import RuntimeRegistryEntry
 from kiro_conduit.runtime.types import RuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,16 @@ def _pick_first(models: list[str], candidates: list[str]) -> str | None:
         if candidate in models:
             return candidate
     return None
+
+
+def _candidates_for_tier(tier_profile: str, fallback: list[str]) -> list[str]:
+    if tier_profile == "max":
+        return ["claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", *fallback]
+    if tier_profile == "strong":
+        return ["claude-sonnet-5", "claude-sonnet-4.6", "claude-sonnet-4.5", *fallback]
+    if tier_profile == "fast":
+        return ["claude-haiku-4.5", "deepseek-3.2", "minimax-m2.5", *fallback]
+    return ["claude-sonnet-4.6", "claude-sonnet-4.5", "claude-sonnet-4", *fallback]
 
 
 def list_kiro_models(bin_path: str) -> tuple[list[str], str | None]:
@@ -85,6 +97,19 @@ def list_kiro_models(bin_path: str) -> tuple[list[str], str | None]:
     return models, default_value
 
 
+def discover_runtime_registry(runtime: RuntimeConfig) -> RuntimeRegistryEntry:
+    available = which(runtime.bin) is not None
+    if not available:
+        return RuntimeRegistryEntry(runtime=runtime, available=False, models=[])
+    models: list[str] = []
+    default_model: str | None = None
+    if runtime.kind == "kiro-cli-acp":
+        models, default_model = list_kiro_models(runtime.bin)
+    return RuntimeRegistryEntry(
+        runtime=runtime, available=True, models=models, default_model=default_model
+    )
+
+
 def resolve_runtime_for_prompt(
     runtime: RuntimeConfig, prompt: str, *, role: str = "generic"
 ) -> RuntimeConfig:
@@ -109,7 +134,8 @@ def resolve_runtime_for_prompt(
         )
         return runtime
 
-    models, default_model = list_kiro_models(runtime.bin)
+    registry = discover_runtime_registry(runtime)
+    models = registry.models
     if not models:
         logger.info(
             "[runtime] role=%s kind=%s model=%s score=%s reason=kiro-smart-no-list",
@@ -120,29 +146,29 @@ def resolve_runtime_for_prompt(
         )
         return runtime
 
-    if score >= 7:
+    if score >= runtime.hard_threshold:
         tier = "hard"
         chosen = (
-            _pick_first(models, ["claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6"])
-            or _pick_first(models, ["claude-sonnet-5", "claude-sonnet-4.6"])
-            or default_model
+            _pick_first(
+                models,
+                _candidates_for_tier(runtime.hard_tier, ["claude-sonnet-5", "claude-sonnet-4.6"]),
+            )
+            or registry.default_model
         )
-    elif score >= 4:
+    elif score >= runtime.medium_threshold:
         tier = "medium"
         chosen = (
-            _pick_first(models, ["claude-sonnet-5", "claude-sonnet-4.6", "claude-sonnet-4.5"])
-            or _pick_first(models, ["claude-opus-4.8", "claude-opus-4.7"])
-            or default_model
+            _pick_first(
+                models,
+                _candidates_for_tier(runtime.medium_tier, ["claude-opus-4.8", "claude-opus-4.7"]),
+            )
+            or registry.default_model
         )
     else:
         tier = "simple"
         chosen = (
-            _pick_first(
-                models,
-                ["claude-sonnet-4.6", "claude-sonnet-4.5", "claude-sonnet-4", "claude-haiku-4.5"],
-            )
-            or _pick_first(models, ["claude-sonnet-5", "minimax-m2.5", "deepseek-3.2"])
-            or default_model
+            _pick_first(models, _candidates_for_tier(runtime.simple_tier, ["claude-sonnet-5"]))
+            or registry.default_model
         )
     resolved = replace(runtime, model=chosen or runtime.model)
     logger.info(

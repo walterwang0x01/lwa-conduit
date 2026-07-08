@@ -90,6 +90,11 @@ def _runtime_from_args(
         runtime_kind="cursor-agent-cli" if kind == "cursor-agent-cli" else "kiro-cli-acp",
         model=model,
         timeout=timeout,
+        simple_tier=getattr(args, "kiro_simple_tier", "balanced"),
+        medium_tier=getattr(args, "kiro_medium_tier", "strong"),
+        hard_tier=getattr(args, "kiro_hard_tier", "max"),
+        medium_threshold=getattr(args, "kiro_medium_threshold", 4),
+        hard_threshold=getattr(args, "kiro_hard_threshold", 7),
     )
 
 
@@ -577,6 +582,36 @@ def main(argv: list[str] | None = None) -> int:
         help="default agent binary path (used when a role-specific bin is not set)",
     )
     run_p.add_argument(
+        "--kiro-simple-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="balanced",
+        help="preferred Kiro model tier for simple tasks",
+    )
+    run_p.add_argument(
+        "--kiro-medium-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="strong",
+        help="preferred Kiro model tier for medium tasks",
+    )
+    run_p.add_argument(
+        "--kiro-hard-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="max",
+        help="preferred Kiro model tier for hard tasks",
+    )
+    run_p.add_argument(
+        "--kiro-medium-threshold",
+        type=int,
+        default=4,
+        help="complexity score threshold for medium Kiro routing",
+    )
+    run_p.add_argument(
+        "--kiro-hard-threshold",
+        type=int,
+        default=7,
+        help="complexity score threshold for hard Kiro routing",
+    )
+    run_p.add_argument(
         "--runtime-kind",
         choices=("kiro-cli-acp", "cursor-agent-cli"),
         default="kiro-cli-acp",
@@ -638,6 +673,36 @@ def main(argv: list[str] | None = None) -> int:
         "--out", required=True, help="output workspace dir (dag.yaml + specs/)"
     )
     plan_p.add_argument("--kiro-cli", default="kiro-cli", help="default planner binary")
+    plan_p.add_argument(
+        "--kiro-simple-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="balanced",
+        help="preferred Kiro model tier for simple tasks",
+    )
+    plan_p.add_argument(
+        "--kiro-medium-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="strong",
+        help="preferred Kiro model tier for medium tasks",
+    )
+    plan_p.add_argument(
+        "--kiro-hard-tier",
+        choices=("fast", "balanced", "strong", "max"),
+        default="max",
+        help="preferred Kiro model tier for hard tasks",
+    )
+    plan_p.add_argument(
+        "--kiro-medium-threshold",
+        type=int,
+        default=4,
+        help="complexity score threshold for medium Kiro routing",
+    )
+    plan_p.add_argument(
+        "--kiro-hard-threshold",
+        type=int,
+        default=7,
+        help="complexity score threshold for hard Kiro routing",
+    )
     plan_p.add_argument(
         "--planner-runtime-kind",
         choices=("kiro-cli-acp", "cursor-agent-cli"),

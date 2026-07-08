@@ -112,6 +112,36 @@ kiro-conduit run --workspace my-workspace/ --merge
 | `--max-concurrency N` | 同波次最大并发（默认 4） |
 | `--max-attempts N` | 单 task 失败重试上限（默认 3） |
 | `--kiro-cli <path>` | kiro-cli 可执行文件路径（默认 `kiro-cli`） |
+| `--kiro-simple-tier <tier>` | Kiro 简单任务优先 tier：`fast` / `balanced` / `strong` / `max` |
+| `--kiro-medium-tier <tier>` | Kiro 中等任务优先 tier |
+| `--kiro-hard-tier <tier>` | Kiro 复杂任务优先 tier |
+| `--kiro-medium-threshold N` | 进入中等复杂度路由的阈值（默认 4） |
+| `--kiro-hard-threshold N` | 进入高复杂度路由的阈值（默认 7） |
+
+## 成本优先的多模型路由
+
+当 runtime 是 `kiro-cli-acp` 时，`kiro-conduit` 会先根据 prompt 复杂度打分，再从
+`kiro-cli chat --list-models --format json` 的实时结果中选模型，而不是硬编码假定模型名。
+
+推荐起步策略：
+
+```bash
+kiro-conduit run \
+  --workspace my-workspace/ \
+  --runtime-kind cursor-agent-cli \
+  --kiro-cli agent \
+  --reviewer-runtime-kind kiro-cli-acp \
+  --reviewer-bin kiro-cli \
+  --kiro-simple-tier balanced \
+  --kiro-medium-tier strong \
+  --kiro-hard-tier max
+```
+
+这个组合适合“实现便宜优先，评审能力优先”：
+
+- implementor：默认更偏低成本 / 高吞吐
+- reviewer：默认更偏强模型
+- planner：如需更稳，也可以单独切到 `kiro-cli-acp`
 
 ## 全局约定注入（`conventions`）
 
