@@ -30,6 +30,7 @@ from kiro_conduit.metrics import (
     RuntimeMetricRecord,
     load_metrics,
     metrics_path,
+    recommend_strategy,
     save_metrics,
     summarize_metrics,
 )
@@ -153,6 +154,14 @@ def _print_runtime_metrics_report(records: list[RuntimeMetricRecord]) -> None:
             f"{row['runtime_kind']} / {row['model']}: "
             f"total={row['total']} success={row['success']} failed={row['failed']} "
             f"success_rate={float(row['success_rate']):.0%} avg_files={row['avg_files_changed']}"
+        )
+    recommendation = recommend_strategy(records)
+    if recommendation.get("sample_size", 0):
+        print(
+            "\n✓ adaptive recommendation:"
+            f" runtime={recommendation.get('preferred_runtime_kind') or '(keep current)'}"
+            f" model={recommendation.get('preferred_model') or '(keep current)'}"
+            f" samples={recommendation['sample_size']}"
         )
 
 def _warn_unowned_shared_files(ws: Workspace, report: ParallelRunReport) -> list[str]:

@@ -74,3 +74,22 @@ def summarize_metrics(records: list[RuntimeMetricRecord]) -> list[dict[str, obje
             }
         )
     return sorted(summary, key=lambda item: (-int(item["total"]), -float(item["success_rate"])))
+
+
+def recommend_strategy(records: list[RuntimeMetricRecord]) -> dict[str, object]:
+    rows = summarize_metrics(records)
+    eligible = [row for row in rows if int(row["total"]) >= 3]
+    if not eligible:
+        return {"sample_size": 0, "reason": "insufficient-history"}
+    best_runtime = eligible[0]
+    best_kiro = next((row for row in eligible if row["runtime_kind"] == "kiro-cli-acp"), None)
+    return {
+        "sample_size": sum(int(row["total"]) for row in eligible),
+        "preferred_runtime_kind": (
+            best_runtime["runtime_kind"] if float(best_runtime["success_rate"]) >= 0.8 else None
+        ),
+        "preferred_model": (
+            best_kiro["model"] if best_kiro and float(best_kiro["success_rate"]) >= 0.8 else None
+        ),
+        "reason": "history-success-rate",
+    }
