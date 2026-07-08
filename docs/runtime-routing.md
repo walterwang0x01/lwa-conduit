@@ -114,3 +114,5 @@ kiro-conduit run --workspace ws/ --adaptive-mode apply-safe --review --review-ta
 4. 始终让 reviewer 保留更强 runtime；不要为了省钱把审查也切成最弱模型
 
 跨项目总览见 `lark-kiro-bridge` 的 `docs/runtime-routing-production.md`。
+
+如果你想先看团队/开源读者视角的整体说明，再看本页调参细节，先读 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)。

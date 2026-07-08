@@ -3,6 +3,8 @@
 把一份 workspace（含 `dag.yaml`）跑成完整流程：按 DAG 波次并行派给 Kiro 写代码 →
 分层验证 → 默认产出可 review 的分支（或 `--merge` 合并）。
 
+如果你还不清楚它在整套多 CLI 体系里的角色，先读 [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)。
+
 ## 安装
 
 ```bash
