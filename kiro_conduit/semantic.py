@@ -20,6 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from kiro_conduit.runtime.cursor_cli import cursor_prompt_text
+from kiro_conduit.runtime.types import RuntimeConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -123,12 +126,19 @@ class KiroSemanticReviewer:
 
     def __init__(
         self,
+        runtime: RuntimeConfig | None = None,
+        *,
         kiro_cli_path: str = "kiro-cli",
         timeout: float = 180.0,
         max_diff_chars: int = 30000,
         model: str | None = None,
     ) -> None:
-        self._kiro_cli_path = kiro_cli_path
+        self._runtime = runtime or RuntimeConfig.from_cli(
+            kiro_cli=kiro_cli_path,
+            runtime_kind="kiro-acp",
+            model=model,
+            timeout=timeout,
+        )
         self._timeout = timeout
         self._max_diff_chars = max_diff_chars
         self._model = model
@@ -168,6 +178,9 @@ class KiroSemanticReviewer:
 
     async def _run_kiro_review(self, cwd: Path, prompt: str) -> str:
         """起一个独立 ACP session，发 review prompt，收齐所有 message chunk 拼成响应。"""
+        if self._runtime.kind == "cursor-cli":
+            return await cursor_prompt_text(self._runtime, cwd=cwd, prompt=prompt)
+
         # 局部 import 避免顶部循环依赖
         from kiro_conduit.acp import (
             AcpClient,
@@ -177,10 +190,10 @@ class KiroSemanticReviewer:
         )
 
         config = AcpClientConfig(
-            kiro_cli_path=self._kiro_cli_path,
+            kiro_cli_path=self._runtime.bin,
             cwd=cwd,
             response_timeout=self._timeout,
-            model=self._model,
+            model=self._model or self._runtime.model,
         )
         chunks: list[str] = []
         async with await AcpClient.spawn(config) as client:

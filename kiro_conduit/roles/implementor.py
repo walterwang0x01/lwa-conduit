@@ -25,9 +25,9 @@ from kiro_conduit.acp import (
     ToolCallEvent,
     TurnEnd,
 )
+from kiro_conduit.git_utils import collect_diff, list_changed_files
 from kiro_conduit.runtime.cursor_cli import cursor_prompt_stream
 from kiro_conduit.runtime.types import RuntimeConfig
-from kiro_conduit.git_utils import collect_diff, list_changed_files
 from kiro_conduit.types import Task, TaskResult
 
 logger = logging.getLogger(__name__)

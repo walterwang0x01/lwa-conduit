@@ -28,6 +28,7 @@ from kiro_conduit.git_utils import run_git
 from kiro_conduit.merge import MergeOrchestrator, MergeReport
 from kiro_conduit.orchestrator import ParallelOrchestrator, ParallelRunReport
 from kiro_conduit.run_state import load_state, state_path
+from kiro_conduit.runtime import RuntimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,26 @@ def _venv_path_prepend(venv: Path, current_path: str) -> str:
     if not bin_dir.is_dir():
         raise SystemExit(f"--venv: {bin_dir} 不存在（不是有效的 venv）")
     return f"{bin_dir.resolve()}{os.pathsep}{current_path}"
+
+
+def _runtime_from_args(
+    args: argparse.Namespace,
+    *,
+    role: str,
+    default_kind: str,
+    model: str | None,
+    timeout: float = 600.0,
+) -> RuntimeConfig:
+    kind = getattr(args, f"{role}_runtime_kind", None) or default_kind
+    bin_override = getattr(args, f"{role}_bin", None)
+    if bin_override is None:
+        bin_override = args.kiro_cli
+    return RuntimeConfig.from_cli(
+        kiro_cli=bin_override,
+        runtime_kind="cursor-cli" if kind == "cursor-cli" else "kiro-acp",
+        model=model,
+        timeout=timeout,
+    )
 
 
 def _print_parallel_report(ws: Workspace, report: ParallelRunReport) -> None:
@@ -133,7 +154,14 @@ async def _review_integration(
     )
     ref = "kiro-conduit/integration" if code == 0 else base_branch
     reviewer = KiroSemanticReviewer(
-        kiro_cli_path=args.kiro_cli, model=args.review_model, max_diff_chars=120000
+        runtime=_runtime_from_args(
+            args,
+            role="reviewer",
+            default_kind="kiro-acp",
+            model=args.review_model,
+        ),
+        max_diff_chars=120000,
+        model=args.review_model,
     )
     from rich.console import Console
 
@@ -281,6 +309,20 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"  log file: {log_path}")
     dest = "merge into base branch" if args.merge else "leave branches for review (no merge)"
     print(f"  on success: {dest}")
+    impl_runtime = _runtime_from_args(
+        args,
+        role="implementor",
+        default_kind=getattr(args, "runtime_kind", "kiro-acp"),
+        model=None,
+    )
+    review_runtime = _runtime_from_args(
+        args,
+        role="reviewer",
+        default_kind="kiro-acp",
+        model=args.review_model,
+    )
+    print(f"  implementor runtime: {impl_runtime.kind} ({impl_runtime.bin})")
+    print(f"  reviewer runtime: {review_runtime.kind} ({review_runtime.bin})")
     summary = f"  {len(ws.tasks)} tasks, {len(ws.phases)} phases"
     if ws.repos:
         summary += f", repos: {sorted(ws.repos)}"
@@ -294,7 +336,13 @@ async def _run(args: argparse.Namespace) -> int:
         from kiro_conduit.semantic import KiroSemanticReviewer
 
         task_reviewer = KiroSemanticReviewer(
-            kiro_cli_path=args.kiro_cli, model=args.review_model
+            runtime=_runtime_from_args(
+                args,
+                role="reviewer",
+                default_kind="kiro-acp",
+                model=args.review_model,
+            ),
+            model=args.review_model,
         )
         print("  per-task semantic review: ON（每任务对照 spec 审，超时 600s）")
     orch = ParallelOrchestrator(
@@ -302,6 +350,13 @@ async def _run(args: argparse.Namespace) -> int:
         base_repo=base_repo,
         max_concurrency=args.max_concurrency,
         max_attempts=args.max_attempts,
+        implementor_runtime=_runtime_from_args(
+            args,
+            role="implementor",
+            default_kind=getattr(args, "runtime_kind", "kiro-acp"),
+            model=None,
+            timeout=600.0,
+        ),
         kiro_cli_path=args.kiro_cli,
         runtime_kind=getattr(args, "runtime_kind", "kiro-acp"),
         resume=args.resume,
@@ -428,7 +483,15 @@ async def _plan(args: argparse.Namespace) -> int:
 
     print(f"✓ planning from spec: {spec_path}")
     planner = KiroPlanner(
-        kiro_cli_path=args.kiro_cli, model=args.model, prompt_timeout=args.timeout
+        runtime=_runtime_from_args(
+            args,
+            role="planner",
+            default_kind=getattr(args, "planner_runtime_kind", "kiro-acp"),
+            model=args.model,
+            timeout=args.timeout,
+        ),
+        model=args.model,
+        prompt_timeout=args.timeout,
     )
     from rich.console import Console
 
@@ -508,12 +571,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument("--max-concurrency", type=int, default=4)
     run_p.add_argument("--max-attempts", type=int, default=3)
-    run_p.add_argument("--kiro-cli", default="kiro-cli", help="path to agent binary (kiro-cli or agent)")
+    run_p.add_argument(
+        "--kiro-cli",
+        default="kiro-cli",
+        help="default agent binary path (used when a role-specific bin is not set)",
+    )
     run_p.add_argument(
         "--runtime-kind",
         choices=("kiro-acp", "cursor-cli"),
         default="kiro-acp",
-        help="agent runtime: kiro-cli acp (default) or cursor agent CLI",
+        help="default implementor runtime if no role-specific override is set",
+    )
+    run_p.add_argument(
+        "--implementor-runtime-kind",
+        choices=("kiro-acp", "cursor-cli"),
+        default=None,
+        help="runtime for task execution workers (defaults to --runtime-kind)",
+    )
+    run_p.add_argument(
+        "--implementor-bin",
+        default=None,
+        help="binary for implementor runtime (e.g. agent or kiro-cli)",
+    )
+    run_p.add_argument(
+        "--reviewer-runtime-kind",
+        choices=("kiro-acp", "cursor-cli"),
+        default="kiro-acp",
+        help="runtime for semantic reviewer (default: kiro-acp)",
+    )
+    run_p.add_argument(
+        "--reviewer-bin",
+        default="kiro-cli",
+        help="binary for semantic reviewer runtime (default: kiro-cli)",
+    )
+    run_p.add_argument(
+        "--planner-runtime-kind",
+        choices=("kiro-acp", "cursor-cli"),
+        default="kiro-acp",
+        help="reserved for future plan reuse; current run path does not invoke planner",
     )
     run_p.add_argument("--resume", action="store_true", help="resume from prior run-state")
     run_p.add_argument(
@@ -542,7 +637,18 @@ def main(argv: list[str] | None = None) -> int:
     plan_p.add_argument(
         "--out", required=True, help="output workspace dir (dag.yaml + specs/)"
     )
-    plan_p.add_argument("--kiro-cli", default="kiro-cli", help="path to kiro-cli binary")
+    plan_p.add_argument("--kiro-cli", default="kiro-cli", help="default planner binary")
+    plan_p.add_argument(
+        "--planner-runtime-kind",
+        choices=("kiro-acp", "cursor-cli"),
+        default="kiro-acp",
+        help="runtime for planning (default: kiro-acp)",
+    )
+    plan_p.add_argument(
+        "--planner-bin",
+        default=None,
+        help="binary for planner runtime (defaults to --kiro-cli)",
+    )
     plan_p.add_argument(
         "--model", default=None, help="model id for planning (default: Kiro default)"
     )

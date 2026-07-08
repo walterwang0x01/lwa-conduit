@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from kiro_conduit.dag import TaskDef, Workspace, topological_waves
-from kiro_conduit.runtime.types import RuntimeConfig
 from kiro_conduit.events import (
     EventBus,
     RunCompleted,
@@ -45,6 +44,7 @@ from kiro_conduit.run_state import (
     save_state,
     state_path,
 )
+from kiro_conduit.runtime.types import RuntimeConfig
 from kiro_conduit.types import Task
 from kiro_conduit.worktree import WorktreeHandle, WorktreeManager
 
@@ -97,6 +97,7 @@ class ParallelOrchestrator:
         base_repo: Path,
         max_concurrency: int = 4,
         max_attempts: int = 3,
+        implementor_runtime: RuntimeConfig | None = None,
         kiro_cli_path: str = "kiro-cli",
         runtime_kind: str = "kiro-acp",
         prompt_timeout: float = 600.0,
@@ -118,7 +119,7 @@ class ParallelOrchestrator:
         self._max_concurrency = max_concurrency
         self._max_attempts = max_attempts
         self._kiro_cli_path = kiro_cli_path
-        self._runtime = RuntimeConfig.from_cli(
+        self._runtime = implementor_runtime or RuntimeConfig.from_cli(
             kiro_cli=kiro_cli_path,
             runtime_kind="cursor-cli" if runtime_kind == "cursor-cli" else "kiro-acp",
             timeout=prompt_timeout,

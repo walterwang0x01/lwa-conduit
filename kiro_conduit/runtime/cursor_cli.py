@@ -60,3 +60,16 @@ async def cursor_prompt_stream(
     if code != 0:
         stderr = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
         logger.warning("cursor agent exit %s: %s", code, stderr[:300])
+
+
+async def cursor_prompt_text(
+    runtime: RuntimeConfig,
+    *,
+    cwd: Path,
+    prompt: str,
+    resume_id: str | None = None,
+) -> str:
+    parts: list[str] = []
+    async for chunk in cursor_prompt_stream(runtime, cwd=cwd, prompt=prompt, resume_id=resume_id):
+        parts.append(chunk)
+    return "".join(parts).strip()
