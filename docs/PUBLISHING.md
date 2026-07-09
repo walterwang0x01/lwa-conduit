@@ -60,6 +60,16 @@ Manual dry-run in GitHub Actions:
 2. Click `Run workflow`
 3. Leave `publish_to_pypi` unchecked to only build artifacts
 
+Equivalent CLI commands:
+
+```bash
+# Build-only dry-run
+gh workflow run release.yml -f publish_to_pypi=false
+
+# Build + publish (after trusted publisher is configured)
+gh workflow run release.yml -f publish_to_pypi=true
+```
+
 ## User install paths
 
 ```bash
