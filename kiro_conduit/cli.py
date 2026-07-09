@@ -37,6 +37,12 @@ from kiro_conduit.metrics import (
 from kiro_conduit.orchestrator import ParallelOrchestrator, ParallelRunReport
 from kiro_conduit.run_state import load_state, state_path
 from kiro_conduit.runtime import RuntimeConfig
+from kiro_conduit.runtime.quota import (
+    fallback_kinds_for_bucket,
+    is_quota_blocked,
+    pick_first_available_kind,
+    probe_runtime_kind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +114,10 @@ def _runtime_from_args(
         resolved_model = model
     allowed_kinds = {"kiro-cli-acp", "cursor-agent-cli", "gemini-cli"}
     runtime_kind = kind if kind in allowed_kinds else "kiro-cli-acp"
+    if is_quota_blocked(probe_runtime_kind(runtime_kind)):
+        fallback = pick_first_available_kind(fallback_kinds_for_bucket(adaptive_bucket))
+        if fallback:
+            runtime_kind = fallback
     return RuntimeConfig.from_cli(
         kiro_cli=bin_override,
         runtime_kind=runtime_kind,
