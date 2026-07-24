@@ -331,7 +331,6 @@ async def _review_integration(
 
     返回 reviewer metric（execution_ok ≠ verdict）；失败开路径可能仍有 metric。
     """
-    from lwa_conduit.git_utils import run_git
     from lwa_conduit.paths import conduit_dir, resolve_integration_ref
     from lwa_conduit.semantic import KiroSemanticReviewer, review_integration
 

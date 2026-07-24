@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from lwa_conduit.paths import CONDUIT_DIR_NAME, conduit_dir
+from lwa_conduit.paths import CONDUIT_DIR_NAME as CONDUIT_DIR_NAME  # 重新导出给 memory.py 用
+from lwa_conduit.paths import conduit_dir
+
 RUN_STATE_FILENAME = "run-state.json"
 _SCHEMA_VERSION = 1
 
