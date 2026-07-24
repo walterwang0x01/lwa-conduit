@@ -210,6 +210,132 @@ class TestPlanValidationAndRepair:
         assert "校验" in calls[1] or "没通过" in calls[1] or "src/x.py" in calls[1]
 
 
+class TestAskRetriesOnTransientAcpError:
+    """
+    _ask() 内部重试逻辑：用户真实反馈 ACP -32603 是偶发的、非确定性错误，
+    原样重跑常能成功，不该让用户手动重试（见 lwa-bridge PROGRESS.md）。
+    判定标准跟 Implementor._run_acp 保持一致：-32603 与 -32000~-32099
+    服务端错误区间视为瞬时重试；其它协议错（如 -32601）不重试。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        """patch asyncio.sleep：不真等，记录每次退避时长。"""
+        import lwa_conduit.planner as planner_mod
+
+        slept: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            slept.append(delay)
+
+        monkeypatch.setattr(planner_mod.asyncio, "sleep", fake_sleep)
+        return slept
+
+    async def test_retries_on_acp_internal_error_and_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+    ) -> None:
+        """第一、二次报 -32603，第三次成功：应该拿到结果，不抛异常。"""
+        from lwa_conduit.acp.messages import AcpError
+        from lwa_conduit.planner import KiroPlanner
+
+        calls = {"n": 0}
+
+        async def flaky(self, prompt, cwd, runtime):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise AcpError(code=-32603, message="Internal error")
+            return "ok result"
+
+        monkeypatch.setattr(KiroPlanner, "_run_acp_once", flaky)
+        planner = KiroPlanner(max_ask_retries=2, model="claude-sonnet-4.6")
+        result = await planner._ask("prompt", tmp_path)
+        assert result == "ok result"
+        assert calls["n"] == 3  # 重试了两次
+        assert _no_sleep == [1.0, 2.0]  # 指数退避：1.0 → 2.0
+
+    async def test_deterministic_acp_error_does_not_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+    ) -> None:
+        """-32601（方法不存在）是确定性协议错：不重试，直接把异常抛给调用方。"""
+        from lwa_conduit.acp.messages import AcpError
+        from lwa_conduit.planner import KiroPlanner
+
+        calls = {"n": 0}
+
+        async def always(self, prompt, cwd, runtime):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            raise AcpError(code=-32601, message="Method not found")
+
+        monkeypatch.setattr(KiroPlanner, "_run_acp_once", always)
+        planner = KiroPlanner(max_ask_retries=2, model="claude-sonnet-4.6")
+        with pytest.raises(AcpError) as exc_info:
+            await planner._ask("prompt", tmp_path)
+        assert exc_info.value.code == -32601
+        assert calls["n"] == 1  # 没重试
+        assert _no_sleep == []
+
+    async def test_exhausts_retries_then_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+    ) -> None:
+        """一直报可重试错误：用完 max_ask_retries 次重试后，最终把异常抛出去。"""
+        from lwa_conduit.acp.messages import AcpError
+        from lwa_conduit.planner import KiroPlanner
+
+        calls = {"n": 0}
+
+        async def always_fails(self, prompt, cwd, runtime):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            raise AcpError(code=-32603, message="Internal error")
+
+        monkeypatch.setattr(KiroPlanner, "_run_acp_once", always_fails)
+        planner = KiroPlanner(max_ask_retries=2, model="claude-sonnet-4.6")
+        with pytest.raises(AcpError) as exc_info:
+            await planner._ask("prompt", tmp_path)
+        assert exc_info.value.code == -32603
+        assert calls["n"] == 3  # 首次 + 2 次重试
+        assert _no_sleep == [1.0, 2.0]
+
+    async def test_server_error_range_is_retryable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+    ) -> None:
+        """-32050 落在服务端错误区间(-32000~-32099)内，同样应该重试。"""
+        from lwa_conduit.acp.messages import AcpError
+        from lwa_conduit.planner import KiroPlanner
+
+        calls = {"n": 0}
+
+        async def flaky(self, prompt, cwd, runtime):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise AcpError(code=-32050, message="Server error")
+            return "ok"
+
+        monkeypatch.setattr(KiroPlanner, "_run_acp_once", flaky)
+        planner = KiroPlanner(max_ask_retries=2, model="claude-sonnet-4.6")
+        result = await planner._ask("prompt", tmp_path)
+        assert result == "ok"
+        assert calls["n"] == 2
+
+    async def test_no_retries_when_first_attempt_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _no_sleep: list[float]
+    ) -> None:
+        """正常路径：第一次就成功，不应该有任何 sleep/重试开销。"""
+        from lwa_conduit.planner import KiroPlanner
+
+        calls = {"n": 0}
+
+        async def ok(self, prompt, cwd, runtime):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            return "ok"
+
+        monkeypatch.setattr(KiroPlanner, "_run_acp_once", ok)
+        planner = KiroPlanner(max_ask_retries=2, model="claude-sonnet-4.6")
+        result = await planner._ask("prompt", tmp_path)
+        assert result == "ok"
+        assert calls["n"] == 1
+        assert _no_sleep == []
+
+
 class TestParseEvaluation:
     """parse_evaluation 纯解析（不调 LLM）。"""
 

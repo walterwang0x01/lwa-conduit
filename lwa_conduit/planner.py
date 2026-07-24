@@ -20,6 +20,7 @@ LLM 产出的 plan JSON 约定：
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -404,6 +405,8 @@ class KiroPlanner:
         self_eval: bool = True,
         max_eval_repairs: int = 1,
         memory: Memory | None = None,
+        max_ask_retries: int = 2,
+        ask_retry_base_delay: float = 1.0,
     ) -> None:
         self._runtime = runtime or RuntimeConfig.from_cli(
             kiro_cli=kiro_cli_path,
@@ -417,6 +420,13 @@ class KiroPlanner:
         self._self_eval = self_eval
         self._max_eval_repairs = max_eval_repairs
         self._memory = memory
+        # 瞬时基础设施错误（ACP -32603 内部错误 / -32000~-32099 服务端错误
+        # 区间）时的退避重试，跟 Implementor 同一套判定标准。用户真实反馈：
+        # kiro-cli ACP 协议模式偶发不稳定，原样重跑同一条命令常能成功
+        # （见 lwa-bridge 项目 PROGRESS.md 的调查记录），不该让用户手动重试。
+        # max_ask_retries=2 → 最多跑 3 次。
+        self._max_ask_retries = max_ask_retries
+        self._ask_retry_base_delay = ask_retry_base_delay
         # 最近一次自评结果，供调用方查看 / 日志
         self.last_evaluation: PlanEvaluation | None = None
 
@@ -526,17 +536,8 @@ class KiroPlanner:
 
         return tasks, raw_plan
 
-    async def _ask(self, prompt: str, cwd: Path) -> str:
-        runtime = resolve_runtime_for_prompt(self._runtime, prompt, role="planner")
-        if runtime.kind == "cursor-agent-cli":
-            from lwa_conduit.runtime.cursor_cli import cursor_prompt_text
-
-            return await cursor_prompt_text(runtime, cwd=cwd, prompt=prompt)
-        if runtime.kind == "gemini-cli":
-            from lwa_conduit.runtime.gemini_cli import gemini_prompt_text
-
-            return await gemini_prompt_text(runtime, cwd=cwd, prompt=prompt)
-
+    async def _run_acp_once(self, prompt: str, cwd: Path, runtime: RuntimeConfig) -> str:
+        """单次 ACP 调用，不含重试。拆出来方便单测直接 monkeypatch。"""
         from lwa_conduit.acp import AcpClient, AcpClientConfig, AgentMessageChunk, TurnEnd
 
         config = AcpClientConfig(
@@ -556,3 +557,43 @@ class KiroPlanner:
                 elif isinstance(event, TurnEnd):
                     break
         return "".join(parts)
+
+    async def _ask(self, prompt: str, cwd: Path) -> str:
+        runtime = resolve_runtime_for_prompt(self._runtime, prompt, role="planner")
+        if runtime.kind == "cursor-agent-cli":
+            from lwa_conduit.runtime.cursor_cli import cursor_prompt_text
+
+            return await cursor_prompt_text(runtime, cwd=cwd, prompt=prompt)
+        if runtime.kind == "gemini-cli":
+            from lwa_conduit.runtime.gemini_cli import gemini_prompt_text
+
+            return await gemini_prompt_text(runtime, cwd=cwd, prompt=prompt)
+
+        from lwa_conduit.acp.messages import AcpError
+
+        # 瞬时基础设施错误（ACP -32603 内部错误 / -32000~-32099 服务端错误
+        # 区间）时的退避重试，判定标准跟 Implementor._run_acp 一致。用户
+        # 真实反馈：kiro-cli ACP 协议模式偶发不稳定，原样重跑同一条命令
+        # 常能成功，不该让用户手动重试（见 lwa-bridge 项目 PROGRESS.md）。
+        for attempt in range(1, self._max_ask_retries + 2):
+            try:
+                return await self._run_acp_once(prompt, cwd, runtime)
+            except (TimeoutError, ConnectionError, AcpError) as exc:
+                retryable = not isinstance(exc, AcpError) or (
+                    exc.code == -32603 or -32099 <= exc.code <= -32000
+                )
+                if retryable and attempt <= self._max_ask_retries:
+                    delay = self._ask_retry_base_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[planner] ACP attempt %d/%d failed: %s; retrying in %.1fs",
+                        attempt,
+                        self._max_ask_retries + 1,
+                        exc,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        # 循环设计上总会在最后一次尝试内 return 或 raise，不会自然落到这里；
+        # 加一行保证类型检查器满意，同时给出明确的失败信息而不是隐式 None。
+        raise RuntimeError("planner._ask exhausted retries without returning or raising")
